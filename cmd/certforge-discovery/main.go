@@ -153,9 +153,15 @@ func cmdSetup() {
 	fmt.Printf("\nConfig saved to %s\n", cfgPath)
 	fmt.Println()
 	fmt.Println("Next steps:")
-	fmt.Println("  1. Add domains and scan targets in CertForge → Discovery")
-	fmt.Println("  2. Run:  certforge-discovery scan")
-	fmt.Println("  3. Or:   certforge-discovery agent  (runs continuously)")
+	fmt.Println("  Run a scan now:")
+	fmt.Println("    certforge-discovery scan -domain example.com")
+	fmt.Println("    certforge-discovery scan -domain example.com -target 10.0.1.0/24")
+	fmt.Println()
+	fmt.Println("  Or run continuously (polls every 6h):")
+	fmt.Println("    certforge-discovery agent -domain example.com")
+	fmt.Println()
+	fmt.Println("  Optionally, add domains in CertForge → Discovery to manage them centrally")
+	fmt.Println("  (the agent will pull that list automatically alongside any -domain flags).")
 }
 
 // ── scan ──────────────────────────────────────────────────────────────────────

@@ -32,6 +32,13 @@ chmod +x certforge-discovery
 sudo mv certforge-discovery /usr/local/bin/
 ```
 
+**Verify the download** (optional but recommended):
+
+```bash
+curl -Lo checksums.txt https://github.com/CertForge-LLC/certforge-discovery/releases/latest/download/checksums.txt
+sha256sum -c checksums.txt --ignore-missing
+```
+
 Or install from source (requires Go 1.22+):
 
 ```bash
@@ -191,6 +198,41 @@ Environment=HTTPS_PROXY=http://proxy.corp.com:8080
 Environment=NO_PROXY=localhost,10.0.0.0/8
 ExecStart=/usr/local/bin/certforge-discovery agent -domain example.com
 ```
+
+## What is reported to CertForge
+
+When a CertForge account is configured, the agent posts **certificate metadata only** to your CertForge region. The exact fields sent for each certificate:
+
+| Field | Example | Notes |
+|-------|---------|-------|
+| `fingerprint` | `sha256:3f2a...` | SHA-256 of the DER-encoded cert |
+| `serial` | `0x1A2B3C...` | Certificate serial number |
+| `issuer` | `C=US, O=Let's Encrypt, CN=R11` | Issuer distinguished name |
+| `subject` | `example.com` | Subject common name |
+| `sans` | `example.com, www.example.com` | Subject alternative names |
+| `not_before` | `2024-01-01T00:00:00Z` | Validity start |
+| `not_after` | `2024-04-01T00:00:00Z` | Expiry |
+| `source` | `ct_log`, `tls_scan`, `local`, `k8s` | How the cert was found |
+| `source_detail` | `192.168.1.50:443` | Specific endpoint or path |
+| `seen_deployed` | `true` | Whether a live TLS handshake confirmed it |
+| `eku` | `["TLS Web Server Authentication"]` | Extended key usages |
+
+**Never read or transmitted:**
+- Private keys or key material of any kind
+- Plaintext traffic or HTTP request/response bodies
+- Filesystem contents beyond recognized certificate file formats
+- Kubernetes secrets other than `kubernetes.io/tls` type (and even those: only the `tls.crt` field, never `tls.key`)
+
+### Inspect before you trust: `-dry-run`
+
+Run any scan with `-dry-run` to print the exact JSON payload that *would* be sent to CertForge — without posting anything:
+
+```bash
+certforge-discovery scan -domain example.com -dry-run
+certforge-discovery scan -domain example.com -target 10.0.1.0/24 -dry-run | jq .
+```
+
+The output is the verbatim request body. You can confirm it contains only the fields listed above before allowing the agent outbound access to CertForge.
 
 ## Data residency
 

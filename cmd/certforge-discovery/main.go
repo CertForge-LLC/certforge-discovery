@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -79,6 +80,7 @@ Scan flags:
   -local              Scan local filesystem for cert files
   -k8s                Scan Kubernetes TLS secrets
   -out <file>         Write to file (.csv or .json); prints table to stdout if omitted
+  -dry-run            Print the JSON payload that would be sent to CertForge; do not post
   -config <path>      Config file (default: ~/.certforge-discovery/config.yaml)
 
 `, Version)
@@ -320,6 +322,7 @@ type scanOpts struct {
 	ports      string
 	scanLocal  bool
 	scanK8s    bool
+	dryRun     bool
 }
 
 type multiFlag []string
@@ -334,6 +337,7 @@ func parseScanFlags(cmd string, args []string) scanOpts {
 	ports    := fs.String("ports", "443,8443", "ports for TLS scan")
 	local    := fs.Bool("local", false, "scan local filesystem")
 	k8s      := fs.Bool("k8s", false, "scan Kubernetes TLS secrets")
+	dryRun   := fs.Bool("dry-run", false, "print JSON that would be sent to CertForge; do not post")
 
 	var domains, targets multiFlag
 	fs.Var(&domains, "domain", "domain to scan via CT log (repeatable)")
@@ -348,6 +352,7 @@ func parseScanFlags(cmd string, args []string) scanOpts {
 		ports:     *ports,
 		scanLocal: *local,
 		scanK8s:   *k8s,
+		dryRun:    *dryRun,
 	}
 
 	// Config is optional — only needed to talk to CertForge.
@@ -463,23 +468,29 @@ func runScan(ctx context.Context, opts scanOpts) ([]client.Cert, error) {
 
 	// Post to CertForge if configured.
 	if opts.cfg != nil && len(all) > 0 {
-		c := client.New(opts.cfg.CertForgeURL, opts.cfg.APIKey)
-		total, errs := 0, 0
-		for i := 0; i < len(all); i += ingestBatchSize {
-			end := i + ingestBatchSize
-			if end > len(all) {
-				end = len(all)
+		if opts.dryRun {
+			body, _ := json.MarshalIndent(map[string]any{"certs": all}, "", "  ")
+			fmt.Printf("--- DRY RUN: %d cert(s) found, nothing posted to CertForge (%s) ---\n", len(all), opts.cfg.CertForgeURL)
+			fmt.Println(string(body))
+		} else {
+			c := client.New(opts.cfg.CertForgeURL, opts.cfg.APIKey)
+			total, errs := 0, 0
+			for i := 0; i < len(all); i += ingestBatchSize {
+				end := i + ingestBatchSize
+				if end > len(all) {
+					end = len(all)
+				}
+				result, err := c.Ingest(all[i:end])
+				if err != nil {
+					log.Printf("[scan] ingest batch: %v", err)
+					errs++
+					continue
+				}
+				total += result.Ingested
+				errs += result.Errors
 			}
-			result, err := c.Ingest(all[i:end])
-			if err != nil {
-				log.Printf("[scan] ingest batch: %v", err)
-				errs++
-				continue
-			}
-			total += result.Ingested
-			errs += result.Errors
+			log.Printf("[scan] posted to CertForge — %d ingested, %d errors", total, errs)
 		}
-		log.Printf("[scan] posted to CertForge — %d ingested, %d errors", total, errs)
 	}
 
 	log.Printf("[scan] complete — %d certificate(s) found", len(all))

@@ -26,6 +26,11 @@ jobs:
           CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64  go build -ldflags "-X main.Version=${{ github.ref_name }}" -o dist/certforge-discovery-darwin-arm64     ./cmd/certforge-discovery
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64  go build -ldflags "-X main.Version=${{ github.ref_name }}" -o dist/certforge-discovery-windows-amd64.exe ./cmd/certforge-discovery
 
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:

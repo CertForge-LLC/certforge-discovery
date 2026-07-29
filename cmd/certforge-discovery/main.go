@@ -32,6 +32,8 @@ func main() {
 	switch os.Args[1] {
 	case "setup":
 		cmdSetup()
+	case "roll":
+		cmdRoll()
 	case "scan":
 		cmdScan(os.Args[2:])
 	case "agent":
@@ -61,6 +63,7 @@ Commands:
   setup             Connect to a CertForge account (optional — enables reporting
                     results to CertForge, pulling domain lists centrally, and
                     scanning internal networks from this host)
+  roll              Replace the stored API key (after rotating it in CertForge)
   version           Print version
 
 Scan flags:
@@ -169,6 +172,46 @@ func cmdSetup() {
 	fmt.Println()
 	fmt.Println("  Optionally, add domains in CertForge → Discovery to manage them centrally")
 	fmt.Println("  (the agent will pull that list automatically alongside any -domain flags).")
+}
+
+// ── roll ──────────────────────────────────────────────────────────────────────
+
+func cmdRoll() {
+	cfgPath := config.DefaultPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		log.Fatalf("no config found — run 'certforge-discovery setup' first\n(%v)", err)
+	}
+
+	stdin := bufio.NewReader(os.Stdin)
+	fmt.Printf("Rolling API key for %s\n", cfg.CertForgeURL)
+	fmt.Println()
+	fmt.Printf("Open %s/settings/api-keys in your browser to create a new key.\n", cfg.CertForgeURL)
+	fmt.Println("Required permissions: Read, Enroll")
+	fmt.Println()
+	fmt.Print("Paste new API key here: ")
+	newKey, _ := stdin.ReadString('\n')
+	newKey = strings.TrimSpace(newKey)
+	if newKey == "" {
+		fmt.Fprintln(os.Stderr, "Error: API key is required.")
+		os.Exit(1)
+	}
+
+	fmt.Print("Verifying... ")
+	c := client.New(cfg.CertForgeURL, newKey)
+	if _, err := c.GetConfig(); err != nil {
+		fmt.Println("failed.")
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("ok.")
+
+	cfg.APIKey = newKey
+	if err := config.Save(cfgPath, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Config updated at %s\n", cfgPath)
 }
 
 // ── scan ──────────────────────────────────────────────────────────────────────

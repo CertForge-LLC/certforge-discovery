@@ -14,7 +14,7 @@ type Config struct {
 	CertForgeURL string        `yaml:"certforge_url"` // e.g. https://app.certgovernance.app
 	APIKey       string        `yaml:"api_key"`        // bearer token from CertForge Settings → API Keys
 	PollInterval time.Duration `yaml:"poll_interval"`  // how often agent re-scans; default 6h
-	ScanLocal    bool          `yaml:"scan_local"`     // scan local filesystem for cert files
+ScanLocal    bool          `yaml:"scan_local"`     // scan local filesystem for cert files
 	StoragePaths []string      `yaml:"storage_paths"`  // additional filesystem paths to scan
 	ScanK8s      bool          `yaml:"scan_k8s"`       // scan Kubernetes TLS secrets
 	KubeConfig   string        `yaml:"kubeconfig"`     // path to kubeconfig; empty = in-cluster

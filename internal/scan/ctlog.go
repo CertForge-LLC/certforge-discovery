@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync"
 	"strings"
 	"time"
 
@@ -20,6 +21,9 @@ const (
 	crtshSubdomainURL = "https://crt.sh/?q=%%25.%s&output=json&exclude=expired"
 	crtshApexURL      = "https://crt.sh/?q=%s&output=json&exclude=expired"
 	crtshCertURL      = "https://crt.sh/?d=%s"
+
+	crtshTimeout    = 90 * time.Second
+	ekuConcurrency  = 5
 )
 
 type crtshEntry struct {
@@ -33,18 +37,29 @@ type crtshEntry struct {
 }
 
 // ScanCTLog queries crt.sh for all known certs for domain and returns discovered certs.
-func ScanCTLog(ctx context.Context, hc *http.Client, domain string) ([]client.Cert, error) {
+func ScanCTLog(ctx context.Context, _ *http.Client, domain string) ([]client.Cert, error) {
+	// Use a dedicated client with a longer timeout — crt.sh can be slow.
+	hc := &http.Client{Timeout: crtshTimeout}
+
+	log.Printf("[ctlog] %s: querying crt.sh (subdomain)...", domain)
 	subEntries, err := fetchCRTSH(ctx, hc, fmt.Sprintf(crtshSubdomainURL, domain))
 	if err != nil {
 		return nil, fmt.Errorf("crt.sh subdomain: %w", err)
 	}
+
+	log.Printf("[ctlog] %s: querying crt.sh (apex)...", domain)
 	apexEntries, _ := fetchCRTSH(ctx, hc, fmt.Sprintf(crtshApexURL, domain))
 
 	entries := append(subEntries, apexEntries...)
 	log.Printf("[ctlog] %s: %d entries from crt.sh", domain, len(entries))
 
 	seen := map[string]bool{}
-	var certs []client.Cert
+	type pending struct {
+		entry crtshEntry
+		cert  client.Cert
+	}
+	var pendings []pending
+
 	for _, e := range entries {
 		key := e.Serial + "|" + e.IssuerName
 		if seen[key] {
@@ -61,23 +76,56 @@ func ScanCTLog(ctx context.Context, hc *http.Client, domain string) ([]client.Ce
 		fp := fingerprintFromMeta(e.Serial, e.IssuerName)
 		sans := strings.ReplaceAll(e.NameValue, "\n", ", ")
 
-		// Attempt to enrich EKU by fetching the raw cert from crt.sh.
-		eku := enrichEKU(ctx, hc, fmt.Sprintf("%d", e.ID))
-
-		certs = append(certs, client.Cert{
-			Fingerprint:  fp,
-			Serial:       e.Serial,
-			Issuer:       e.IssuerName,
-			Subject:      e.CommonName,
-			SANs:         sans,
-			Domain:       domain,
-			NotBefore:    notBefore,
-			NotAfter:     notAfter,
-			Source:       "ct_log",
-			SourceDetail: fmt.Sprintf("crt.sh #%d", e.ID),
-			EKU:          eku,
+		pendings = append(pendings, pending{
+			entry: e,
+			cert: client.Cert{
+				Fingerprint:  fp,
+				Serial:       e.Serial,
+				Issuer:       e.IssuerName,
+				Subject:      e.CommonName,
+				SANs:         sans,
+				Domain:       domain,
+				NotBefore:    notBefore,
+				NotAfter:     notAfter,
+				Source:       "ct_log",
+				SourceDetail: fmt.Sprintf("crt.sh #%d", e.ID),
+			},
 		})
 	}
+
+	if len(pendings) == 0 {
+		return nil, nil
+	}
+
+	// Enrich EKU concurrently with a bounded worker pool.
+	log.Printf("[ctlog] %s: enriching EKU for %d cert(s)...", domain, len(pendings))
+	certs := make([]client.Cert, len(pendings))
+	sem := make(chan struct{}, ekuConcurrency)
+	var wg sync.WaitGroup
+	done := 0
+	var mu sync.Mutex
+
+	for i, p := range pendings {
+		wg.Add(1)
+		go func(idx int, pp pending) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			c := pp.cert
+			c.EKU = enrichEKU(ctx, hc, fmt.Sprintf("%d", pp.entry.ID))
+			certs[idx] = c
+
+			mu.Lock()
+			done++
+			if done%10 == 0 || done == len(pendings) {
+				log.Printf("[ctlog] %s: EKU enrichment %d/%d", domain, done, len(pendings))
+			}
+			mu.Unlock()
+		}(i, p)
+	}
+	wg.Wait()
+
 	return certs, nil
 }
 

@@ -25,15 +25,28 @@ func ScanTLSTarget(ctx context.Context, target, ports string) []client.Cert {
 		return nil
 	}
 
+	total := len(hosts)
+	if total > 1 {
+		log.Printf("[tls] %s: probing %d host(s) on port(s) %s", target, total, ports)
+	}
+
 	var certs []client.Cert
-	for _, host := range hosts {
+	for i, host := range hosts {
+		if ctx.Err() != nil {
+			return certs
+		}
 		for _, port := range portList {
-			if ctx.Err() != nil {
-				return certs
-			}
 			c := probeTLS(ctx, host, port, target)
 			certs = append(certs, c...)
 		}
+		// Print progress every 16 hosts so a /24 gets ~16 updates without flooding.
+		if total > 16 && (i+1)%16 == 0 {
+			log.Printf("[tls] %s: %d/%d hosts probed, %d cert(s) found so far", target, i+1, total, len(certs))
+		}
+	}
+
+	if total > 1 {
+		log.Printf("[tls] %s: done — %d cert(s) found", target, len(certs))
 	}
 	return certs
 }

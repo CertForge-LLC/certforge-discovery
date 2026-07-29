@@ -1,0 +1,6 @@
+# Binaries
+certforge-discovery
+dist/
+
+# macOS
+.DS_Store

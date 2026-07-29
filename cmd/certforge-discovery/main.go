@@ -47,23 +47,30 @@ func main() {
 func usage() {
 	fmt.Fprintf(os.Stderr, `certforge-discovery %s — TLS certificate discovery
 
-Usage:
-  certforge-discovery setup                   Interactive first-time setup
-  certforge-discovery scan   [flags]          Run a single scan and exit
-  certforge-discovery agent  [flags]          Run continuously on poll interval
-  certforge-discovery version                 Print version
+No account required. Scan any domain or network and write results locally:
+
+  certforge-discovery scan -domain example.com
+  certforge-discovery scan -domain example.com -out certs.csv
+  certforge-discovery scan -domain example.com -target 10.0.1.0/24 -out certs.json
+  certforge-discovery scan -local
+  certforge-discovery agent -domain example.com          (runs continuously)
+
+Commands:
+  scan    [flags]   Run a single scan and exit
+  agent   [flags]   Run continuously on the configured poll interval
+  setup             Connect to a CertForge account (optional — enables reporting
+                    results to CertForge, pulling domain lists centrally, and
+                    scanning internal networks from this host)
+  version           Print version
 
 Scan flags:
-  -config <path>      Config file (default: ~/.certforge-discovery/config.yaml)
-  -domain <domain>    Scan CT log for this domain (repeatable; adds to CertForge config)
+  -domain <domain>    CT log scan for this domain (repeatable)
   -target <host>      TLS-scan this host, IP, or CIDR (repeatable)
   -ports <ports>      Ports for TLS scan (default: 443,8443)
   -local              Scan local filesystem for cert files
   -k8s                Scan Kubernetes TLS secrets
-  -out <file>         Write results to file (.csv or .json); stdout table if omitted
-
-No CertForge account needed when using -domain / -target / -out.
-Results are posted to CertForge only when an api_key is configured.
+  -out <file>         Write to file (.csv or .json); prints table to stdout if omitted
+  -config <path>      Config file (default: ~/.certforge-discovery/config.yaml)
 
 `, Version)
 }

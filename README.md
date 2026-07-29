@@ -171,6 +171,27 @@ spec:
 
 Use `scan_k8s: true` in your config (or set via environment variables) to enable Kubernetes secret scanning. The agent reads `kubernetes.io/tls` secrets across all namespaces — grant it a ClusterRole with `secrets: [get, list]`.
 
+## Corporate proxy
+
+If your network requires an outbound proxy, set the standard environment variables before running:
+
+```bash
+export HTTPS_PROXY=http://proxy.corp.com:8080
+export NO_PROXY=localhost,127.0.0.1,10.0.0.0/8
+certforge-discovery scan -domain example.com
+```
+
+This applies to CT log queries (crt.sh) and CertForge API calls. Live TLS scanning (`-target`) makes direct TCP connections and is not proxied — run the agent on a host that can reach the targets directly.
+
+For a systemd service, set the proxy in the unit file:
+
+```ini
+[Service]
+Environment=HTTPS_PROXY=http://proxy.corp.com:8080
+Environment=NO_PROXY=localhost,10.0.0.0/8
+ExecStart=/usr/local/bin/certforge-discovery agent -domain example.com
+```
+
 ## Data residency
 
 certforge-discovery sends certificate metadata only to your configured `certforge_url`. No certificate private keys are ever read or transmitted — the agent only reads the public certificate portion of TLS secrets and cert files.

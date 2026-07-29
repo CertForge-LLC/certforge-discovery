@@ -122,6 +122,8 @@ func cmdSetup() {
 	fmt.Printf("Open %s/settings/api-keys in your browser to create an API key.\n", chosenURL)
 	fmt.Println("(If you don't have an account yet, sign up first at that URL.)")
 	fmt.Println()
+	fmt.Println("Required permissions: Read, Enroll")
+	fmt.Println()
 	fmt.Print("Paste your API key here: ")
 	apiKey, _ := stdin.ReadString('\n')
 	apiKey = strings.TrimSpace(apiKey)

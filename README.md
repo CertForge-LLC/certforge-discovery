@@ -19,8 +19,7 @@ Most certificate problems start with not knowing what you have. **certforge-disc
 
 ## Prerequisites
 
-- A CertForge account — [free tier](https://certgovernance.app) includes full discovery, expiry tracking, and governance workflows. No credit card required.
-- Domains and scan targets configured in CertForge → Discovery.
+No CertForge account required for standalone scanning — use `-domain`, `-target`, and `-out` to scan and save results locally without any account. A CertForge account unlocks full governance workflows, expiry tracking, alerting, and the continuous agent mode.
 
 ## Installation
 
@@ -41,6 +40,26 @@ go install github.com/certforge-llc/certforge-discovery/cmd/certforge-discovery@
 
 ## Quick start
 
+### Without a CertForge account
+
+Scan any domain or network target and write results locally — no account needed:
+
+```bash
+# CT log scan → pretty table to stdout
+certforge-discovery scan -domain example.com
+
+# CT log + TLS live scan → CSV file
+certforge-discovery scan -domain example.com -target 10.0.1.0/24 -out certs.csv
+
+# Local filesystem scan → JSON file
+certforge-discovery scan -local -out certs.json
+
+# All sources → JSON
+certforge-discovery scan -domain example.com -target 10.0.1.0/24 -local -k8s -out certs.json
+```
+
+### With a CertForge account
+
 **1. Run setup** — picks your data region and connects to your CertForge account:
 
 ```bash
@@ -59,6 +78,18 @@ Results appear immediately in CertForge → Discovery.
 
 ```bash
 certforge-discovery agent
+```
+
+## Scan flags
+
+```
+-config <path>    Config file (default: ~/.certforge-discovery/config.yaml)
+-domain <domain>  Scan CT log for this domain (repeatable)
+-target <host>    TLS-scan this host, IP, or CIDR (repeatable)
+-ports <ports>    Ports for TLS scan (default: 443,8443)
+-local            Scan local filesystem for cert files
+-k8s              Scan Kubernetes TLS secrets
+-out <file>       Write to file (.csv or .json); stdout table if omitted
 ```
 
 ## Configuration

@@ -15,8 +15,11 @@ import (
 
 	"github.com/certforge-llc/certforge-discovery/internal/client"
 	"github.com/certforge-llc/certforge-discovery/internal/config"
+	"github.com/certforge-llc/certforge-discovery/internal/output"
 	"github.com/certforge-llc/certforge-discovery/internal/scan"
 )
+
+var Version = "dev"
 
 const defaultBaseURL = "https://app.certgovernance.app"
 
@@ -33,6 +36,8 @@ func main() {
 		cmdScan(os.Args[2:])
 	case "agent":
 		cmdAgent(os.Args[2:])
+	case "version":
+		fmt.Println(Version)
 	default:
 		usage()
 		os.Exit(1)
@@ -40,17 +45,27 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `certforge-discovery — CertForge certificate discovery agent
+	fmt.Fprintf(os.Stderr, `certforge-discovery %s — TLS certificate discovery
 
 Usage:
-  certforge-discovery setup          Interactive first-time setup
-  certforge-discovery scan           Run a single discovery scan and exit
-  certforge-discovery agent          Run continuously on the configured poll interval
+  certforge-discovery setup                   Interactive first-time setup
+  certforge-discovery scan   [flags]          Run a single scan and exit
+  certforge-discovery agent  [flags]          Run continuously on poll interval
+  certforge-discovery version                 Print version
 
-Flags (scan / agent):
-  -config <path>   Config file path (default: ~/.certforge-discovery/config.yaml)
+Scan flags:
+  -config <path>      Config file (default: ~/.certforge-discovery/config.yaml)
+  -domain <domain>    Scan CT log for this domain (repeatable; adds to CertForge config)
+  -target <host>      TLS-scan this host, IP, or CIDR (repeatable)
+  -ports <ports>      Ports for TLS scan (default: 443,8443)
+  -local              Scan local filesystem for cert files
+  -k8s                Scan Kubernetes TLS secrets
+  -out <file>         Write results to file (.csv or .json); stdout table if omitted
 
-`)
+No CertForge account needed when using -domain / -target / -out.
+Results are posted to CertForge only when an api_key is configured.
+
+`, Version)
 }
 
 // ── setup ─────────────────────────────────────────────────────────────────────
@@ -62,7 +77,6 @@ func cmdSetup() {
 	fmt.Println("CertForge Discovery — Setup")
 	fmt.Println()
 
-	// Step 1: pick a CertForge URL / region.
 	baseURL := defaultBaseURL
 	fmt.Printf("Fetching available regions from %s...\n", baseURL)
 	regions, err := client.ListRegions(baseURL)
@@ -104,7 +118,6 @@ func cmdSetup() {
 		fmt.Printf("Using region: %s\n", chosenURL)
 	}
 
-	// Step 2: get API key.
 	fmt.Println()
 	fmt.Printf("Open %s/settings/api-keys in your browser to create an API key.\n", chosenURL)
 	fmt.Println("(If you don't have an account yet, sign up first at that URL.)")
@@ -117,7 +130,6 @@ func cmdSetup() {
 		os.Exit(1)
 	}
 
-	// Step 3: verify the key works.
 	fmt.Print("Verifying API key... ")
 	c := client.New(chosenURL, apiKey)
 	if _, err := c.GetConfig(); err != nil {
@@ -127,7 +139,6 @@ func cmdSetup() {
 	}
 	fmt.Println("ok.")
 
-	// Step 4: write config.
 	cfg := &config.Config{
 		CertForgeURL: chosenURL,
 		APIKey:       apiKey,
@@ -148,46 +159,39 @@ func cmdSetup() {
 // ── scan ──────────────────────────────────────────────────────────────────────
 
 func cmdScan(args []string) {
-	fs := flag.NewFlagSet("scan", flag.ExitOnError)
-	cfgPath := fs.String("config", config.DefaultPath(), "config file path")
-	_ = fs.Parse(args)
-
-	cfg, err := config.Load(*cfgPath)
-	if err != nil {
-		log.Fatalf("config: %v", err)
-	}
+	opts := parseScanFlags("scan", args)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if err := runScan(ctx, cfg); err != nil {
+	certs, err := runScan(ctx, opts)
+	if err != nil {
 		log.Fatalf("scan: %v", err)
 	}
+	writeOutput(opts, certs)
 }
 
 // ── agent ─────────────────────────────────────────────────────────────────────
 
 func cmdAgent(args []string) {
-	fs := flag.NewFlagSet("agent", flag.ExitOnError)
-	cfgPath := fs.String("config", config.DefaultPath(), "config file path")
-	_ = fs.Parse(args)
+	opts := parseScanFlags("agent", args)
 
-	cfg, err := config.Load(*cfgPath)
-	if err != nil {
-		log.Fatalf("config: %v", err)
+	if opts.cfg == nil {
+		log.Fatalf("agent mode requires a config file — run 'certforge-discovery setup' first")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Printf("[agent] starting — polling %s every %s", cfg.CertForgeURL, cfg.PollInterval)
+	log.Printf("[agent] starting — polling %s every %s", opts.cfg.CertForgeURL, opts.cfg.PollInterval)
 
-	// Run immediately on start, then on the interval.
-	if err := runScan(ctx, cfg); err != nil {
+	if certs, err := runScan(ctx, opts); err != nil {
 		log.Printf("[agent] scan error: %v", err)
+	} else {
+		writeOutput(opts, certs)
 	}
 
-	ticker := time.NewTicker(cfg.PollInterval)
+	ticker := time.NewTicker(opts.cfg.PollInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -195,64 +199,159 @@ func cmdAgent(args []string) {
 			log.Printf("[agent] shutting down")
 			return
 		case <-ticker.C:
-			if err := runScan(ctx, cfg); err != nil {
+			if certs, err := runScan(ctx, opts); err != nil {
 				log.Printf("[agent] scan error: %v", err)
+			} else {
+				writeOutput(opts, certs)
 			}
 		}
 	}
+}
+
+// ── flags ─────────────────────────────────────────────────────────────────────
+
+type scanOpts struct {
+	cfg        *config.Config // nil when running without an account
+	outFile    string
+	domains    []string
+	targets    []string
+	ports      string
+	scanLocal  bool
+	scanK8s    bool
+}
+
+type multiFlag []string
+
+func (m *multiFlag) String() string  { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+func parseScanFlags(cmd string, args []string) scanOpts {
+	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
+	cfgPath := fs.String("config", config.DefaultPath(), "config file path")
+	outFile  := fs.String("out", "", "output file (.csv or .json); stdout table if omitted")
+	ports    := fs.String("ports", "443,8443", "ports for TLS scan")
+	local    := fs.Bool("local", false, "scan local filesystem")
+	k8s      := fs.Bool("k8s", false, "scan Kubernetes TLS secrets")
+
+	var domains, targets multiFlag
+	fs.Var(&domains, "domain", "domain to scan via CT log (repeatable)")
+	fs.Var(&targets, "target", "host/IP/CIDR to TLS scan (repeatable)")
+
+	_ = fs.Parse(args)
+
+	opts := scanOpts{
+		outFile:   *outFile,
+		domains:   []string(domains),
+		targets:   []string(targets),
+		ports:     *ports,
+		scanLocal: *local,
+		scanK8s:   *k8s,
+	}
+
+	// Config is optional — only needed to talk to CertForge.
+	cfg, err := config.Load(*cfgPath)
+	if err == nil {
+		opts.cfg = cfg
+	} else if len(opts.domains) == 0 && len(opts.targets) == 0 && !*local && !*k8s {
+		// No config and no explicit scan targets — nothing to do.
+		log.Fatalf("no config found and no scan targets specified\n\nRun 'certforge-discovery setup' to connect to CertForge,\nor use -domain / -target flags to scan without an account.")
+	}
+
+	return opts
 }
 
 // ── core scan logic ───────────────────────────────────────────────────────────
 
 const ingestBatchSize = 200
 
-func runScan(ctx context.Context, cfg *config.Config) error {
-	c := client.New(cfg.CertForgeURL, cfg.APIKey)
-
-	scanCfg, err := c.GetConfig()
-	if err != nil {
-		return fmt.Errorf("fetch config: %w", err)
-	}
-
-	log.Printf("[scan] %d domain(s), %d target(s)", len(scanCfg.Domains), len(scanCfg.Targets))
-
+func runScan(ctx context.Context, opts scanOpts) ([]client.Cert, error) {
 	hc := &http.Client{Timeout: 30 * time.Second}
 	var all []client.Cert
 
-	// CT log + local filesystem per domain.
-	for _, d := range scanCfg.Domains {
+	// Work list: start from CLI flags, then merge CertForge config if available.
+	domains := opts.domains
+	type tgt struct{ target, ports string }
+	var targets []tgt
+	for _, t := range opts.targets {
+		targets = append(targets, tgt{t, opts.ports})
+	}
+	scanLocal := opts.scanLocal
+	scanK8s   := opts.scanK8s
+	var storagePaths []string
+
+	if opts.cfg != nil {
+		c := client.New(opts.cfg.CertForgeURL, opts.cfg.APIKey)
+		scanCfg, err := c.GetConfig()
+		if err != nil {
+			log.Printf("[scan] could not fetch CertForge config: %v", err)
+		} else {
+			for _, d := range scanCfg.Domains {
+				domains = appendUniq(domains, d.Domain)
+				if d.ScanLocal {
+					scanLocal = true
+				}
+			}
+			for _, t := range scanCfg.Targets {
+				targets = append(targets, tgt{t.Target, t.Ports})
+			}
+		}
+		if opts.cfg.ScanLocal {
+			scanLocal = true
+		}
+		if opts.cfg.ScanK8s {
+			scanK8s = true
+		}
+		storagePaths = opts.cfg.StoragePaths
+	}
+
+	log.Printf("[scan] %d domain(s), %d target(s), local=%v k8s=%v",
+		len(domains), len(targets), scanLocal, scanK8s)
+
+	// CT log per domain.
+	for _, domain := range domains {
 		if ctx.Err() != nil {
 			break
 		}
-		log.Printf("[scan] ct_log %s", d.Domain)
-		certs, err := scan.ScanCTLog(ctx, hc, d.Domain)
+		log.Printf("[scan] ct_log %s", domain)
+		certs, err := scan.ScanCTLog(ctx, hc, domain)
 		if err != nil {
-			log.Printf("[scan] ct_log %s: %v", d.Domain, err)
-			_ = c.MarkDomainScanned(d.Domain, "error", err.Error())
+			log.Printf("[scan] ct_log %s: %v", domain, err)
+			if opts.cfg != nil {
+				c := client.New(opts.cfg.CertForgeURL, opts.cfg.APIKey)
+				_ = c.MarkDomainScanned(domain, "error", err.Error())
+			}
 			continue
 		}
 		all = append(all, certs...)
-
-		if d.ScanLocal || cfg.ScanLocal {
-			all = append(all, scan.ScanLocalFS(cfg.StoragePaths)...)
+		if opts.cfg != nil {
+			c := client.New(opts.cfg.CertForgeURL, opts.cfg.APIKey)
+			_ = c.MarkDomainScanned(domain, "ok", "")
 		}
-
-		_ = c.MarkDomainScanned(d.Domain, "ok", "")
 	}
 
-	// TLS live scan per target.
-	for _, t := range scanCfg.Targets {
+	// TLS live scan.
+	for _, t := range targets {
 		if ctx.Err() != nil {
 			break
 		}
-		log.Printf("[scan] tls %s ports=%s", t.Target, t.Ports)
-		all = append(all, scan.ScanTLSTarget(ctx, t.Target, t.Ports)...)
+		log.Printf("[scan] tls %s ports=%s", t.target, t.ports)
+		all = append(all, scan.ScanTLSTarget(ctx, t.target, t.ports)...)
 	}
 
-	// Kubernetes TLS secrets.
-	if cfg.ScanK8s {
+	// Local filesystem.
+	if scanLocal {
+		log.Printf("[scan] local filesystem")
+		all = append(all, scan.ScanLocalFS(storagePaths)...)
+	}
+
+	// Kubernetes secrets.
+	if scanK8s {
 		log.Printf("[scan] k8s secrets")
-		k8sCerts, err := scan.ScanK8sSecrets(ctx, cfg.KubeConfig)
+		kubeconfig := ""
+		if opts.cfg != nil {
+			kubeconfig = opts.cfg.KubeConfig
+		}
+		k8sCerts, err := scan.ScanK8sSecrets(ctx, kubeconfig)
 		if err != nil {
 			log.Printf("[scan] k8s: %v", err)
 		} else {
@@ -260,28 +359,52 @@ func runScan(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 
-	if len(all) == 0 {
-		log.Printf("[scan] no certs found")
-		return nil
+	// Post to CertForge if configured.
+	if opts.cfg != nil && len(all) > 0 {
+		c := client.New(opts.cfg.CertForgeURL, opts.cfg.APIKey)
+		total, errs := 0, 0
+		for i := 0; i < len(all); i += ingestBatchSize {
+			end := i + ingestBatchSize
+			if end > len(all) {
+				end = len(all)
+			}
+			result, err := c.Ingest(all[i:end])
+			if err != nil {
+				log.Printf("[scan] ingest batch: %v", err)
+				errs++
+				continue
+			}
+			total += result.Ingested
+			errs += result.Errors
+		}
+		log.Printf("[scan] posted to CertForge — %d ingested, %d errors", total, errs)
 	}
 
-	// Post in batches.
-	total, errs := 0, 0
-	for i := 0; i < len(all); i += ingestBatchSize {
-		end := i + ingestBatchSize
-		if end > len(all) {
-			end = len(all)
-		}
-		result, err := c.Ingest(all[i:end])
-		if err != nil {
-			log.Printf("[scan] ingest batch %d-%d: %v", i, end, err)
-			errs++
-			continue
-		}
-		total += result.Ingested
-		errs += result.Errors
-	}
+	log.Printf("[scan] complete — %d certificate(s) found", len(all))
+	return all, nil
+}
 
-	log.Printf("[scan] complete — %d cert(s) ingested, %d error(s)", total, errs)
-	return nil
+func writeOutput(opts scanOpts, certs []client.Cert) {
+	if opts.outFile != "" {
+		if err := output.ToFile(opts.outFile, certs); err != nil {
+			log.Printf("output: %v", err)
+		} else {
+			log.Printf("[out] wrote %d cert(s) to %s", len(certs), opts.outFile)
+		}
+		return
+	}
+	// No --out and no CertForge config → print table to stdout.
+	// With CertForge config, results were already posted; skip the table.
+	if opts.cfg == nil {
+		_ = output.Table(certs)
+	}
+}
+
+func appendUniq(s []string, v string) []string {
+	for _, x := range s {
+		if x == v {
+			return s
+		}
+	}
+	return append(s, v)
 }

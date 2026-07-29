@@ -36,7 +36,7 @@ func ScanTLSTarget(ctx context.Context, target, ports string) []client.Cert {
 			return certs
 		}
 		for _, port := range portList {
-			c := probeTLS(ctx, host, port, target)
+			c := probeTLS(ctx, host, port)
 			certs = append(certs, c...)
 		}
 		// Print progress every 16 hosts so a /24 gets ~16 updates without flooding.
@@ -51,7 +51,7 @@ func ScanTLSTarget(ctx context.Context, target, ports string) []client.Cert {
 	return certs
 }
 
-func probeTLS(ctx context.Context, host, port, domain string) []client.Cert {
+func probeTLS(ctx context.Context, host, port string) []client.Cert {
 	timeout := 2 * time.Second
 	if net.ParseIP(host) == nil {
 		timeout = 10 * time.Second
@@ -89,7 +89,7 @@ func probeTLS(ctx context.Context, host, port, domain string) []client.Cert {
 			Issuer:       certIssuerName(cert),
 			Subject:      cert.Subject.CommonName,
 			SANs:         sanList(cert),
-			Domain:       domain,
+			Domain:       host,
 			NotBefore:    &nb,
 			NotAfter:     &na,
 			Source:       "tls_scan",

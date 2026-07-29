@@ -114,6 +114,26 @@ func (c *Client) Ingest(certs []Cert) (*IngestResult, error) {
 	return &result, nil
 }
 
+// StatsResult is the response from GET /api/v1/discovery/stats.
+type StatsResult struct {
+	DiscoveredCerts int    `json:"discovered_certs"`
+	OrgID           string `json:"org_id"`
+}
+
+// GetStats returns the count of discovered certs stored for this org.
+func (c *Client) GetStats() (*StatsResult, error) {
+	var r StatsResult
+	if err := c.get("/api/v1/discovery/stats", &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// ClearCerts deletes all discovered certs stored for this org on CertForge.
+func (c *Client) ClearCerts() error {
+	return c.delete("/api/v1/discovery/certs")
+}
+
 // MarkDomainScanned reports scan completion for a domain so CertForge UI timestamps update.
 func (c *Client) MarkDomainScanned(domain, status, scanErr string) error {
 	body, _ := json.Marshal(map[string]string{
@@ -122,6 +142,24 @@ func (c *Client) MarkDomainScanned(domain, status, scanErr string) error {
 		"error":  scanErr,
 	})
 	return c.post("/api/v1/discovery/domains/scanned", body, nil)
+}
+
+func (c *Client) delete(path string) error {
+	req, err := http.NewRequest(http.MethodDelete, c.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("DELETE %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("DELETE %s: %s %s", path, resp.Status, b)
+	}
+	return nil
 }
 
 func (c *Client) get(path string, out any) error {

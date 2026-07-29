@@ -38,6 +38,10 @@ func main() {
 		cmdScan(os.Args[2:])
 	case "agent":
 		cmdAgent(os.Args[2:])
+	case "status":
+		cmdStatus()
+	case "clear":
+		cmdClear()
 	case "version":
 		fmt.Println(Version)
 	default:
@@ -60,6 +64,8 @@ No account required. Scan any domain or network and write results locally:
 Commands:
   scan    [flags]   Run a single scan and exit
   agent   [flags]   Run continuously on the configured poll interval
+  status            Show how many certs CertForge has stored for your org
+  clear             Delete all discovered certs for your org (use before re-scan)
   setup             Connect to a CertForge account (optional — enables reporting
                     results to CertForge, pulling domain lists centrally, and
                     scanning internal networks from this host)
@@ -172,6 +178,44 @@ func cmdSetup() {
 	fmt.Println()
 	fmt.Println("  Optionally, add domains in CertForge → Discovery to manage them centrally")
 	fmt.Println("  (the agent will pull that list automatically alongside any -domain flags).")
+}
+
+// ── status ────────────────────────────────────────────────────────────────────
+
+func cmdStatus() {
+	cfgPath := config.DefaultPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		log.Fatalf("no config found — run 'certforge-discovery setup' first\n(%v)", err)
+	}
+	c := client.New(cfg.CertForgeURL, cfg.APIKey)
+	stats, err := c.GetStats()
+	if err != nil {
+		log.Fatalf("status: %v", err)
+	}
+	fmt.Printf("CertForge URL : %s\n", cfg.CertForgeURL)
+	fmt.Printf("Org ID        : %s\n", stats.OrgID)
+	fmt.Printf("Discovered    : %d cert(s) in inventory\n", stats.DiscoveredCerts)
+}
+
+// ── clear ─────────────────────────────────────────────────────────────────────
+
+func cmdClear() {
+	cfgPath := config.DefaultPath()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		log.Fatalf("no config found — run 'certforge-discovery setup' first\n(%v)", err)
+	}
+	c := client.New(cfg.CertForgeURL, cfg.APIKey)
+
+	before, _ := c.GetStats()
+	if before != nil {
+		fmt.Printf("Clearing %d cert(s) from %s...\n", before.DiscoveredCerts, cfg.CertForgeURL)
+	}
+	if err := c.ClearCerts(); err != nil {
+		log.Fatalf("clear: %v", err)
+	}
+	fmt.Println("Done. Inventory is now empty for this org.")
 }
 
 // ── roll ──────────────────────────────────────────────────────────────────────

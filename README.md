@@ -238,7 +238,7 @@ The output is the verbatim request body. You can confirm it contains only the fi
 
 certforge-discovery sends certificate metadata only to your configured `certforge_url`. No certificate private keys are ever read or transmitted — the agent only reads the public certificate portion of TLS secrets and cert files.
 
-Your data stays in the region you chose during setup. See [CertForge data residency](https://certgovernance.app/docs/architecture) for details.
+Your data stays in the region you chose during setup. See [CertForge data residency](https://docs.certgovernance.app/architecture) for details.
 
 ## License
 

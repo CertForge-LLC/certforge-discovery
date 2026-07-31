@@ -3,6 +3,7 @@ package scan
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"log"
 	"net"
 	"strings"
@@ -13,7 +14,8 @@ import (
 
 // ScanTLSTarget connects to each host:port derived from target and returns
 // the leaf certificates presented. Handles single hostnames, IPs, and CIDR ranges.
-func ScanTLSTarget(ctx context.Context, target, ports string) []client.Cert {
+// knownCAs is optional: when non-empty, certs signed by those CAs are tagged IssuerType="internal_ca".
+func ScanTLSTarget(ctx context.Context, target, ports string, knownCAs []*x509.Certificate) []client.Cert {
 	portList := parsePorts(ports)
 	if len(portList) == 0 {
 		portList = []string{"443"}
@@ -36,7 +38,7 @@ func ScanTLSTarget(ctx context.Context, target, ports string) []client.Cert {
 			return certs
 		}
 		for _, port := range portList {
-			c := probeTLS(ctx, host, port)
+			c := probeTLS(ctx, host, port, knownCAs)
 			certs = append(certs, c...)
 		}
 		// Print progress every 16 hosts so a /24 gets ~16 updates without flooding.
@@ -51,7 +53,7 @@ func ScanTLSTarget(ctx context.Context, target, ports string) []client.Cert {
 	return certs
 }
 
-func probeTLS(ctx context.Context, host, port string) []client.Cert {
+func probeTLS(ctx context.Context, host, port string, knownCAs []*x509.Certificate) []client.Cert {
 	timeout := 2 * time.Second
 	if net.ParseIP(host) == nil {
 		timeout = 10 * time.Second
@@ -97,6 +99,7 @@ func probeTLS(ctx context.Context, host, port string) []client.Cert {
 			SeenDeployed: true,
 			ScanHosts:    addr,
 			EKU:          ekuStrings(cert),
+			IssuerType:   issuerTypeFor(cert, knownCAs),
 		})
 	}
 	return certs

@@ -37,7 +37,10 @@ type crtshEntry struct {
 }
 
 // ScanCTLog queries crt.sh for all known certs for domain and returns discovered certs.
-func ScanCTLog(ctx context.Context, _ *http.Client, domain string) ([]client.Cert, error) {
+// knownCAs is optional: when non-empty, certs whose issuer name matches a known CA
+// are tagged IssuerType="internal_ca" (string match — CT log entries lack raw cert bytes
+// for cryptographic verification at the listing stage).
+func ScanCTLog(ctx context.Context, _ *http.Client, domain string, knownCAs []*x509.Certificate) ([]client.Cert, error) {
 	// Use a dedicated client with a longer timeout — crt.sh can be slow.
 	hc := &http.Client{Timeout: crtshTimeout}
 
@@ -89,6 +92,7 @@ func ScanCTLog(ctx context.Context, _ *http.Client, domain string) ([]client.Cer
 				NotAfter:     notAfter,
 				Source:       "ct_log",
 				SourceDetail: fmt.Sprintf("crt.sh #%d", e.ID),
+				IssuerType:   issuerTypeFromName(e.IssuerName, knownCAs),
 			},
 		})
 	}

@@ -27,7 +27,8 @@ var defaultPaths = []string{
 
 // ScanLocalFS walks well-known certificate directories (plus any extra paths)
 // and returns all non-expired leaf certificates found.
-func ScanLocalFS(extraPaths []string) []client.Cert {
+// knownCAs is optional: when non-empty, certs signed by those CAs are tagged IssuerType="internal_ca".
+func ScanLocalFS(extraPaths []string, knownCAs []*x509.Certificate) []client.Cert {
 	paths := append(defaultPaths, extraPaths...)
 	var certs []client.Cert
 	for _, root := range paths {
@@ -39,14 +40,14 @@ func ScanLocalFS(extraPaths []string) []client.Cert {
 			if ext != ".crt" && ext != ".pem" && ext != ".cer" {
 				return nil
 			}
-			certs = append(certs, parseLocalCerts(path)...)
+			certs = append(certs, parseLocalCerts(path, knownCAs)...)
 			return nil
 		})
 	}
 	return certs
 }
 
-func parseLocalCerts(path string) []client.Cert {
+func parseLocalCerts(path string, knownCAs []*x509.Certificate) []client.Cert {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -78,6 +79,7 @@ func parseLocalCerts(path string) []client.Cert {
 			Source:       "local",
 			SourceDetail: path,
 			EKU:          ekuStrings(cert),
+			IssuerType:   issuerTypeFor(cert, knownCAs),
 		})
 	}
 	if len(certs) > 0 {

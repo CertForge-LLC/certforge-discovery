@@ -17,7 +17,8 @@ import (
 // ScanK8sSecrets finds all kubernetes.io/tls secrets across all namespaces
 // and returns the leaf certificates stored in them.
 // kubeconfig may be empty to use in-cluster config.
-func ScanK8sSecrets(ctx context.Context, kubeconfig string) ([]client.Cert, error) {
+// knownCAs is optional: when non-empty, certs signed by those CAs are tagged IssuerType="internal_ca".
+func ScanK8sSecrets(ctx context.Context, kubeconfig string, knownCAs []*x509.Certificate) ([]client.Cert, error) {
 	var cfg *rest.Config
 	var err error
 	if kubeconfig != "" {
@@ -50,12 +51,12 @@ func ScanK8sSecrets(ctx context.Context, kubeconfig string) ([]client.Cert, erro
 			continue
 		}
 		ref := secret.Namespace + "/" + secret.Name
-		certs = append(certs, parseK8sCert(certPEM, ref)...)
+		certs = append(certs, parseK8sCert(certPEM, ref, knownCAs)...)
 	}
 	return certs, nil
 }
 
-func parseK8sCert(certPEM []byte, ref string) []client.Cert {
+func parseK8sCert(certPEM []byte, ref string, knownCAs []*x509.Certificate) []client.Cert {
 	var certs []client.Cert
 	for {
 		block, rest := pem.Decode(certPEM)
@@ -83,6 +84,7 @@ func parseK8sCert(certPEM []byte, ref string) []client.Cert {
 			Source:       "k8s",
 			SourceDetail: ref,
 			EKU:          ekuStrings(cert),
+			IssuerType:   issuerTypeFor(cert, knownCAs),
 		})
 	}
 	return certs

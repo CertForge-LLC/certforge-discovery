@@ -9,15 +9,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// InternalCAConfig identifies a private CA cert so discovered certs can be
+// classified as internal vs external.
+type InternalCAConfig struct {
+	Cert  string `yaml:"cert"`  // path to PEM CA certificate
+	Label string `yaml:"label"` // optional friendly name shown in CertForge
+}
+
 // Config is loaded from the config file (default: ~/.certforge-discovery/config.yaml).
 type Config struct {
-	CertForgeURL string        `yaml:"certforge_url"` // e.g. https://app.certgovernance.app
-	APIKey       string        `yaml:"api_key"`        // bearer token from CertForge Settings → API Keys
-	PollInterval time.Duration `yaml:"poll_interval"`  // how often agent re-scans; default 6h
-ScanLocal    bool          `yaml:"scan_local"`     // scan local filesystem for cert files
-	StoragePaths []string      `yaml:"storage_paths"`  // additional filesystem paths to scan
-	ScanK8s      bool          `yaml:"scan_k8s"`       // scan Kubernetes TLS secrets
-	KubeConfig   string        `yaml:"kubeconfig"`     // path to kubeconfig; empty = in-cluster
+	CertForgeURL     string             `yaml:"certforge_url"`     // e.g. https://app.certgovernance.app
+	APIKey           string             `yaml:"api_key"`           // bearer token from CertForge Settings → API Keys
+	PollInterval     time.Duration      `yaml:"poll_interval"`     // how often agent re-scans; default 6h
+	ScanLocal        bool               `yaml:"scan_local"`        // scan local filesystem for cert files
+	StoragePaths     []string           `yaml:"storage_paths"`     // additional filesystem paths to scan
+	ScanK8s          bool               `yaml:"scan_k8s"`          // scan Kubernetes TLS secrets
+	KubeConfig       string             `yaml:"kubeconfig"`        // path to kubeconfig; empty = in-cluster
+	KnownInternalCAs []InternalCAConfig `yaml:"known_internal_cas"` // optional: classify certs signed by these CAs
 }
 
 // DefaultPath returns the default config file path.

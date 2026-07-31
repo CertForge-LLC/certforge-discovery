@@ -375,6 +375,15 @@ func runScan(ctx context.Context, opts scanOpts) ([]client.Cert, error) {
 	hc := &http.Client{Timeout: 30 * time.Second}
 	var all []client.Cert
 
+	// Load known internal CAs from config for issuer classification.
+	var knownCAPaths []string
+	if opts.cfg != nil {
+		for _, ca := range opts.cfg.KnownInternalCAs {
+			knownCAPaths = append(knownCAPaths, ca.Cert)
+		}
+	}
+	knownCAs := scan.LoadKnownCAs(knownCAPaths)
+
 	// Work list: start from CLI flags, then merge CertForge config if available.
 	domains := opts.domains
 	type tgt struct{ target, ports string }
@@ -420,7 +429,7 @@ func runScan(ctx context.Context, opts scanOpts) ([]client.Cert, error) {
 			break
 		}
 		log.Printf("[scan] ct_log %s", domain)
-		certs, err := scan.ScanCTLog(ctx, hc, domain)
+		certs, err := scan.ScanCTLog(ctx, hc, domain, knownCAs)
 		if err != nil {
 			log.Printf("[scan] ct_log %s: %v", domain, err)
 			if opts.cfg != nil {
@@ -442,13 +451,13 @@ func runScan(ctx context.Context, opts scanOpts) ([]client.Cert, error) {
 			break
 		}
 		log.Printf("[scan] tls %s ports=%s", t.target, t.ports)
-		all = append(all, scan.ScanTLSTarget(ctx, t.target, t.ports)...)
+		all = append(all, scan.ScanTLSTarget(ctx, t.target, t.ports, knownCAs)...)
 	}
 
 	// Local filesystem.
 	if scanLocal {
 		log.Printf("[scan] local filesystem")
-		all = append(all, scan.ScanLocalFS(storagePaths)...)
+		all = append(all, scan.ScanLocalFS(storagePaths, knownCAs)...)
 	}
 
 	// Kubernetes secrets.
@@ -458,7 +467,7 @@ func runScan(ctx context.Context, opts scanOpts) ([]client.Cert, error) {
 		if opts.cfg != nil {
 			kubeconfig = opts.cfg.KubeConfig
 		}
-		k8sCerts, err := scan.ScanK8sSecrets(ctx, kubeconfig)
+		k8sCerts, err := scan.ScanK8sSecrets(ctx, kubeconfig, knownCAs)
 		if err != nil {
 			log.Printf("[scan] k8s: %v", err)
 		} else {

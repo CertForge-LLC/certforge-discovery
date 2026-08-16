@@ -74,14 +74,15 @@ Commands:
   version           Print version
 
 Scan flags:
-  -domain <domain>    CT log scan for this domain (repeatable)
-  -target <host>      TLS-scan this host, IP, or CIDR (repeatable)
-  -ports <ports>      Ports for TLS scan (default: 443,8443)
-  -local              Scan local filesystem for cert files
-  -k8s                Scan Kubernetes TLS secrets
-  -out <file>         Write to file (.csv or .json); prints table to stdout if omitted
-  -dry-run            Print the JSON payload that would be sent to CertForge; do not post
-  -config <path>      Config file (default: ~/.certforge-discovery/config.yaml)
+  -domain <domain>         CT log scan for this domain (repeatable)
+  -target <host>           TLS-scan this host, IP, or CIDR (repeatable)
+  -ports <ports>           Ports for TLS scan (default: 443,8443)
+  -local                   Scan local filesystem for cert files
+  -k8s                     Scan Kubernetes TLS secrets
+  -k8s-namespace <ns>      Limit K8s scan to this namespace (repeatable; default: all namespaces)
+  -out <file>              Write to file (.csv or .json); prints table to stdout if omitted
+  -dry-run                 Print the JSON payload that would be sent to CertForge; do not post
+  -config <path>           Config file (default: ~/.certforge-discovery/config.yaml)
 
 `, Version)
 }
@@ -315,14 +316,15 @@ func cmdAgent(args []string) {
 // ── flags ─────────────────────────────────────────────────────────────────────
 
 type scanOpts struct {
-	cfg        *config.Config // nil when running without an account
-	outFile    string
-	domains    []string
-	targets    []string
-	ports      string
-	scanLocal  bool
-	scanK8s    bool
-	dryRun     bool
+	cfg           *config.Config // nil when running without an account
+	outFile       string
+	domains       []string
+	targets       []string
+	ports         string
+	scanLocal     bool
+	scanK8s       bool
+	k8sNamespaces []string // empty = all namespaces
+	dryRun        bool
 }
 
 type multiFlag []string
@@ -339,20 +341,22 @@ func parseScanFlags(cmd string, args []string) scanOpts {
 	k8s      := fs.Bool("k8s", false, "scan Kubernetes TLS secrets")
 	dryRun   := fs.Bool("dry-run", false, "print JSON that would be sent to CertForge; do not post")
 
-	var domains, targets multiFlag
+	var domains, targets, k8sNamespaces multiFlag
 	fs.Var(&domains, "domain", "domain to scan via CT log (repeatable)")
 	fs.Var(&targets, "target", "host/IP/CIDR to TLS scan (repeatable)")
+	fs.Var(&k8sNamespaces, "k8s-namespace", "limit K8s scan to this namespace (repeatable; default: all namespaces)")
 
 	_ = fs.Parse(args)
 
 	opts := scanOpts{
-		outFile:   *outFile,
-		domains:   []string(domains),
-		targets:   []string(targets),
-		ports:     *ports,
-		scanLocal: *local,
-		scanK8s:   *k8s,
-		dryRun:    *dryRun,
+		outFile:       *outFile,
+		domains:       []string(domains),
+		targets:       []string(targets),
+		ports:         *ports,
+		scanLocal:     *local,
+		scanK8s:       *k8s,
+		k8sNamespaces: []string(k8sNamespaces),
+		dryRun:        *dryRun,
 	}
 
 	// Config is optional — only needed to talk to CertForge.
@@ -462,12 +466,25 @@ func runScan(ctx context.Context, opts scanOpts) ([]client.Cert, error) {
 
 	// Kubernetes secrets.
 	if scanK8s {
-		log.Printf("[scan] k8s secrets")
+		// Merge namespaces from CLI flags and config; empty = scan all.
+		var k8sNamespaces []string
+		if opts.cfg != nil {
+			k8sNamespaces = append(k8sNamespaces, opts.cfg.K8sNamespaces...)
+		}
+		k8sNamespaces = append(k8sNamespaces, opts.k8sNamespaces...)
+		k8sNamespaces = dedupStrings(k8sNamespaces)
+
+		if len(k8sNamespaces) > 0 {
+			log.Printf("[scan] k8s secrets (namespaces: %v)", k8sNamespaces)
+		} else {
+			log.Printf("[scan] k8s secrets (all namespaces)")
+		}
+
 		kubeconfig := ""
 		if opts.cfg != nil {
 			kubeconfig = opts.cfg.KubeConfig
 		}
-		k8sCerts, err := scan.ScanK8sSecrets(ctx, kubeconfig, knownCAs)
+		k8sCerts, err := scan.ScanK8sSecrets(ctx, kubeconfig, k8sNamespaces, knownCAs)
 		if err != nil {
 			log.Printf("[scan] k8s: %v", err)
 		} else {
@@ -529,4 +546,16 @@ func appendUniq(s []string, v string) []string {
 		}
 	}
 	return append(s, v)
+}
+
+func dedupStrings(s []string) []string {
+	seen := make(map[string]struct{}, len(s))
+	out := s[:0]
+	for _, v := range s {
+		if _, ok := seen[v]; !ok {
+			seen[v] = struct{}{}
+			out = append(out, v)
+		}
+	}
+	return out
 }

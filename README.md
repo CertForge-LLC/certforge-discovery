@@ -39,7 +39,7 @@ curl -Lo checksums.txt https://github.com/CertForge-LLC/certforge-discovery/rele
 sha256sum -c checksums.txt --ignore-missing
 ```
 
-Or install from source (requires Go 1.22+):
+Or install from source (requires Go 1.21+):
 
 ```bash
 go install github.com/certforge-llc/certforge-discovery/cmd/certforge-discovery@latest
@@ -90,13 +90,15 @@ certforge-discovery agent
 ## Scan flags
 
 ```
--config <path>    Config file (default: ~/.certforge-discovery/config.yaml)
--domain <domain>  Scan CT log for this domain (repeatable)
--target <host>    TLS-scan this host, IP, or CIDR (repeatable)
--ports <ports>    Ports for TLS scan (default: 443,8443)
--local            Scan local filesystem for cert files
--k8s              Scan Kubernetes TLS secrets
--out <file>       Write to file (.csv or .json); stdout table if omitted
+-config <path>         Config file (default: ~/.certforge-discovery/config.yaml)
+-domain <domain>       Scan CT log for this domain (repeatable)
+-target <host>         TLS-scan this host, IP, or CIDR (repeatable)
+-ports <ports>         Ports for TLS scan (default: 443,8443)
+-local                 Scan local filesystem for cert files
+-k8s                   Scan Kubernetes TLS secrets
+-k8s-namespace <ns>    Limit K8s scan to this namespace (repeatable; default: all namespaces)
+-out <file>            Write to file (.csv or .json); stdout table if omitted
+-dry-run               Print the JSON payload without posting to CertForge
 ```
 
 ## Configuration
@@ -112,9 +114,14 @@ poll_interval: 6h                               # how often agent re-scans
 scan_local: false        # scan local filesystem for cert files
 scan_k8s: false          # scan Kubernetes TLS secrets
 kubeconfig: ""           # path to kubeconfig; empty = in-cluster config
-storage_paths:           # additional filesystem paths to scan
+k8s_namespaces:          # namespaces to scan; leave empty to scan all namespaces
+  - default              # (empty = requires cluster-wide Secret list permission)
+  - production
+storage_paths:           # additional filesystem paths to scan (beyond the defaults)
   - /opt/app/certs
 ```
+
+**Local filesystem scan paths:** by default the agent scans `/etc/ssl/certs`, `/etc/nginx/ssl`, `/etc/nginx/certs`, `/etc/apache2/ssl`, `/etc/httpd/ssl`, `/etc/letsencrypt/live`, `/etc/letsencrypt/archive`, and `/etc/pki/tls/certs`. `/etc/ssl/private` is intentionally excluded — it contains private keys, not certificates. Add it explicitly via `storage_paths` if you have a specific need, but note it typically requires root access.
 
 **EU West (GDPR) example:**
 
@@ -142,6 +149,33 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl enable --now certforge-discovery
+```
+
+## Running in Docker
+
+```bash
+docker run -d --name certforge-discovery \
+  -e CERTFORGE_URL=https://app.certgovernance.app \
+  -e API_KEY=cf_... \
+  -v /etc/certforge-discovery/config.yaml:/etc/certforge-discovery/config.yaml:ro \
+  ghcr.io/certforge-llc/certforge-discovery:latest
+```
+
+For local filesystem scanning, mount the paths you want scanned:
+
+```bash
+docker run -d --name certforge-discovery \
+  -v /etc/certforge-discovery/config.yaml:/etc/certforge-discovery/config.yaml:ro \
+  -v /etc/ssl/certs:/etc/ssl/certs:ro \
+  -v /etc/nginx/ssl:/etc/nginx/ssl:ro \
+  ghcr.io/certforge-llc/certforge-discovery:latest \
+  agent -local
+```
+
+Build from source:
+
+```bash
+docker build --build-arg VERSION=v0.1.9 -t certforge-discovery:latest .
 ```
 
 ## Running in Kubernetes
@@ -176,7 +210,36 @@ spec:
                   key: api_key
 ```
 
-Use `scan_k8s: true` in your config (or set via environment variables) to enable Kubernetes secret scanning. The agent reads `kubernetes.io/tls` secrets across all namespaces — grant it a ClusterRole with `secrets: [get, list]`.
+### Kubernetes secret scanning and RBAC
+
+Enable with `scan_k8s: true` in your config. By default the agent reads `kubernetes.io/tls` secrets across **all namespaces**, which requires a ClusterRole:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: certforge-discovery
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+```
+
+To limit scanning to specific namespaces, set `k8s_namespaces` in your config or use the `-k8s-namespace` flag. With namespace restrictions you can use a Role (not ClusterRole) bound to each namespace instead:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: certforge-discovery
+  namespace: production   # repeat per namespace
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+```
+
+The agent never reads `tls.key` — only `tls.crt` is accessed and only certificate metadata (not key material) is reported to CertForge.
 
 ## Corporate proxy
 

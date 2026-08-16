@@ -14,46 +14,75 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// ScanK8sSecrets finds all kubernetes.io/tls secrets across all namespaces
-// and returns the leaf certificates stored in them.
+// ScanK8sSecrets finds kubernetes.io/tls secrets and returns the leaf
+// certificates stored in them.
+//
 // kubeconfig may be empty to use in-cluster config.
+// namespaces restricts the scan to the listed namespaces; pass nil or an empty
+// slice to scan all namespaces (requires cluster-wide Secret list permission).
 // knownCAs is optional: when non-empty, certs signed by those CAs are tagged IssuerType="internal_ca".
-func ScanK8sSecrets(ctx context.Context, kubeconfig string, knownCAs []*x509.Certificate) ([]client.Cert, error) {
-	var cfg *rest.Config
+func ScanK8sSecrets(ctx context.Context, kubeconfig string, namespaces []string, knownCAs []*x509.Certificate) ([]client.Cert, error) {
+	var restCfg *rest.Config
 	var err error
 	if kubeconfig != "" {
-		cfg, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		restCfg, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
 	} else {
-		cfg, err = rest.InClusterConfig()
+		restCfg, err = rest.InClusterConfig()
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	cs, err := k8sclient.NewForConfig(cfg)
+	cs, err := k8sclient.NewForConfig(restCfg)
 	if err != nil {
 		return nil, err
 	}
 
-	secrets, err := cs.CoreV1().Secrets("").List(ctx, metav1.ListOptions{
-		FieldSelector: "type=kubernetes.io/tls",
-	})
-	if err != nil {
-		return nil, err
+	listOpts := metav1.ListOptions{FieldSelector: "type=kubernetes.io/tls"}
+
+	var secretItems []secretItem
+	if len(namespaces) == 0 {
+		// No filter — list across all namespaces.
+		list, err := cs.CoreV1().Secrets("").List(ctx, listOpts)
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range list.Items {
+			secretItems = append(secretItems, secretItem{ns: s.Namespace, name: s.Name, data: s.Data})
+		}
+	} else {
+		// Namespace-filtered — list each namespace independently.
+		for _, ns := range namespaces {
+			list, err := cs.CoreV1().Secrets(ns).List(ctx, listOpts)
+			if err != nil {
+				log.Printf("[k8s] namespace %s: %v", ns, err)
+				continue
+			}
+			for _, s := range list.Items {
+				secretItems = append(secretItems, secretItem{ns: s.Namespace, name: s.Name, data: s.Data})
+			}
+		}
 	}
 
-	log.Printf("[k8s] found %d TLS secrets", len(secrets.Items))
+	log.Printf("[k8s] found %d TLS secrets", len(secretItems))
 
 	var certs []client.Cert
-	for _, secret := range secrets.Items {
-		certPEM, ok := secret.Data["tls.crt"]
+	for _, s := range secretItems {
+		certPEM, ok := s.data["tls.crt"]
 		if !ok {
 			continue
 		}
-		ref := secret.Namespace + "/" + secret.Name
+		ref := s.ns + "/" + s.name
 		certs = append(certs, parseK8sCert(certPEM, ref, knownCAs)...)
 	}
 	return certs, nil
+}
+
+// secretItem is a minimal representation of a TLS secret to avoid holding
+// the full Kubernetes API object after the list call.
+type secretItem struct {
+	ns, name string
+	data     map[string][]byte
 }
 
 func parseK8sCert(certPEM []byte, ref string, knownCAs []*x509.Certificate) []client.Cert {

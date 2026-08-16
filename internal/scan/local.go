@@ -13,9 +13,12 @@ import (
 	"github.com/certforge-llc/certforge-discovery/internal/client"
 )
 
+// defaultPaths are the filesystem locations scanned when -local is active.
+// /etc/ssl/private is intentionally excluded: it holds private keys, not
+// certificates. Scanning it requires elevated permissions and yields no
+// certificate data; include it explicitly via storage_paths if needed.
 var defaultPaths = []string{
 	"/etc/ssl/certs",
-	"/etc/ssl/private",
 	"/etc/nginx/ssl",
 	"/etc/nginx/certs",
 	"/etc/apache2/ssl",

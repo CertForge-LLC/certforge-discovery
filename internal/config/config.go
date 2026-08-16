@@ -23,8 +23,9 @@ type Config struct {
 	PollInterval     time.Duration      `yaml:"poll_interval"`     // how often agent re-scans; default 6h
 	ScanLocal        bool               `yaml:"scan_local"`        // scan local filesystem for cert files
 	StoragePaths     []string           `yaml:"storage_paths"`     // additional filesystem paths to scan
-	ScanK8s          bool               `yaml:"scan_k8s"`          // scan Kubernetes TLS secrets
-	KubeConfig       string             `yaml:"kubeconfig"`        // path to kubeconfig; empty = in-cluster
+	ScanK8s          bool               `yaml:"scan_k8s"`           // scan Kubernetes TLS secrets
+	KubeConfig       string             `yaml:"kubeconfig"`         // path to kubeconfig; empty = in-cluster
+	K8sNamespaces    []string           `yaml:"k8s_namespaces"`     // namespaces to scan; empty = all (requires cluster-wide Secret list)
 	KnownInternalCAs []InternalCAConfig `yaml:"known_internal_cas"` // optional: classify certs signed by these CAs
 }
 

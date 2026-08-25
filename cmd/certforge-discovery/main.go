@@ -193,7 +193,10 @@ func cmdStatus() {
 	if err != nil {
 		log.Fatalf("no config found — run 'certforge-discovery setup' first\n(%v)", err)
 	}
-	c := client.New(cfg.CertForgeURL, cfg.APIKey)
+	c, err := newClient(cfg)
+	if err != nil {
+		log.Fatalf("client setup: %v", err)
+	}
 	stats, err := c.GetStats()
 	if err != nil {
 		log.Fatalf("status: %v", err)
@@ -211,7 +214,10 @@ func cmdClear() {
 	if err != nil {
 		log.Fatalf("no config found — run 'certforge-discovery setup' first\n(%v)", err)
 	}
-	c := client.New(cfg.CertForgeURL, cfg.APIKey)
+	c, err := newClient(cfg)
+	if err != nil {
+		log.Fatalf("client setup: %v", err)
+	}
 
 	before, _ := c.GetStats()
 	if before != nil {
@@ -247,6 +253,9 @@ func cmdRoll() {
 	}
 
 	fmt.Print("Verifying... ")
+	// For the verification step use a fresh bearer-token client with the new key —
+	// mTLS auth is keyed to the certificate, not the API key, so a key-roll check
+	// always goes through the bearer path regardless of what the config says.
 	c := client.New(cfg.CertForgeURL, newKey)
 	if _, err := c.GetConfig(); err != nil {
 		fmt.Println("failed.")
@@ -373,6 +382,25 @@ func parseScanFlags(cmd string, args []string) scanOpts {
 	return opts
 }
 
+// ── CertForge client factory ───────────────────────────────────────────────────
+
+// newClient returns a CertForge API client for the given config.
+// When ClientCertFile is set the client uses mTLS; otherwise it falls back to
+// the legacy bearer-token path.  Errors are returned so callers can decide
+// whether to fatal or log-and-continue.
+func newClient(cfg *config.Config) (*client.Client, error) {
+	if cfg.ClientCertFile != "" {
+		return client.NewMTLS(
+			cfg.CertForgeURL,
+			cfg.MTLSEndpoint(),
+			cfg.ClientCertFile,
+			cfg.ClientKeyFile,
+			cfg.ServerCAFile,
+		)
+	}
+	return client.New(cfg.CertForgeURL, cfg.APIKey), nil
+}
+
 // ── core scan logic ───────────────────────────────────────────────────────────
 
 const ingestBatchSize = 200
@@ -390,6 +418,17 @@ func runScan(ctx context.Context, opts scanOpts) ([]client.Cert, error) {
 	}
 	knownCAs := scan.LoadKnownCAs(knownCAPaths)
 
+	// Build the CertForge client once per scan run (not once per batch).
+	// mTLS clients hold a tls.Config — safe to reuse across requests.
+	var cfClient *client.Client
+	if opts.cfg != nil {
+		var clientErr error
+		cfClient, clientErr = newClient(opts.cfg)
+		if clientErr != nil {
+			log.Printf("[scan] CertForge client setup failed: %v — results will not be posted", clientErr)
+		}
+	}
+
 	// Work list: start from CLI flags, then merge CertForge config if available.
 	domains := opts.domains
 	type tgt struct{ target, ports string }
@@ -401,9 +440,8 @@ func runScan(ctx context.Context, opts scanOpts) ([]client.Cert, error) {
 	scanK8s   := opts.scanK8s
 	var storagePaths []string
 
-	if opts.cfg != nil {
-		c := client.New(opts.cfg.CertForgeURL, opts.cfg.APIKey)
-		scanCfg, err := c.GetConfig()
+	if cfClient != nil {
+		scanCfg, err := cfClient.GetConfig()
 		if err != nil {
 			log.Printf("[scan] could not fetch CertForge config: %v", err)
 		} else {
@@ -438,16 +476,14 @@ func runScan(ctx context.Context, opts scanOpts) ([]client.Cert, error) {
 		certs, err := scan.ScanCTLog(ctx, hc, domain, knownCAs)
 		if err != nil {
 			log.Printf("[scan] ct_log %s: %v", domain, err)
-			if opts.cfg != nil {
-				c := client.New(opts.cfg.CertForgeURL, opts.cfg.APIKey)
-				_ = c.MarkDomainScanned(domain, "error", err.Error())
+			if cfClient != nil {
+				_ = cfClient.MarkDomainScanned(domain, "error", err.Error())
 			}
 			continue
 		}
 		all = append(all, certs...)
-		if opts.cfg != nil {
-			c := client.New(opts.cfg.CertForgeURL, opts.cfg.APIKey)
-			_ = c.MarkDomainScanned(domain, "ok", "")
+		if cfClient != nil {
+			_ = cfClient.MarkDomainScanned(domain, "ok", "")
 		}
 	}
 
@@ -495,20 +531,19 @@ func runScan(ctx context.Context, opts scanOpts) ([]client.Cert, error) {
 	}
 
 	// Post to CertForge if configured.
-	if opts.cfg != nil && len(all) > 0 {
+	if cfClient != nil && len(all) > 0 {
 		if opts.dryRun {
 			body, _ := json.MarshalIndent(map[string]any{"certs": all}, "", "  ")
 			fmt.Printf("--- DRY RUN: %d cert(s) found, nothing posted to CertForge (%s) ---\n", len(all), opts.cfg.CertForgeURL)
 			fmt.Println(string(body))
 		} else {
-			c := client.New(opts.cfg.CertForgeURL, opts.cfg.APIKey)
 			total, errs := 0, 0
 			for i := 0; i < len(all); i += ingestBatchSize {
 				end := i + ingestBatchSize
 				if end > len(all) {
 					end = len(all)
 				}
-				result, err := c.Ingest(all[i:end])
+				result, err := cfClient.Ingest(all[i:end])
 				if err != nil {
 					log.Printf("[scan] ingest batch: %v", err)
 					errs++

@@ -33,6 +33,8 @@ func main() {
 	switch os.Args[1] {
 	case "setup":
 		cmdSetup()
+	case "enroll":
+		cmdEnroll(os.Args[2:])
 	case "roll":
 		cmdRoll()
 	case "scan":

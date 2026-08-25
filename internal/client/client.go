@@ -2,26 +2,82 @@ package client
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
 // Client talks to the CertForge discovery API.
+// It supports two auth modes:
+//   - Bearer token (legacy): set apiKey; uses the dashboard endpoint (dashURL).
+//   - mTLS (preferred): set clientCert + serverCA; uses the mTLS endpoint (mtlsURL).
+//     When mTLS is active, apiKey is ignored and requests go to the mTLS port.
 type Client struct {
-	baseURL string
-	apiKey  string
+	dashURL string // dashboard base URL (bearer token path)
+	mtlsURL string // mTLS server base URL (e.g. https://host:8443)
+	apiKey  string // bearer token (empty when using mTLS)
 	http    *http.Client
+	useMTLS bool
 }
 
+// New returns a bearer-token client (legacy mode).
 func New(baseURL, apiKey string) *Client {
 	return &Client{
-		baseURL: baseURL,
+		dashURL: baseURL,
 		apiKey:  apiKey,
 		http:    &http.Client{Timeout: 30 * time.Second},
+		useMTLS: false,
 	}
+}
+
+// NewMTLS returns a client that authenticates with a client certificate.
+// certFile and keyFile are paths to the PEM client cert and key written by the enroll command.
+// caFile is the path to the CertForge client CA PEM (for server cert pinning on the mTLS port).
+// dashURL is the dashboard base URL (for endpoints not yet on the mTLS server).
+// mtlsURL is the base URL of the mTLS server (e.g. https://host:8443).
+func NewMTLS(dashURL, mtlsURL, certFile, keyFile, caFile string) (*Client, error) {
+	clientCert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load client cert: %w", err)
+	}
+
+	tlsCfg := &tls.Config{
+		Certificates: []tls.Certificate{clientCert},
+		MinVersion:   tls.VersionTLS12,
+	}
+	if caFile != "" {
+		caPEM, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read server CA: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("server CA: no valid certs in %s", caFile)
+		}
+		tlsCfg.RootCAs = pool
+	}
+
+	transport := &http.Transport{TLSClientConfig: tlsCfg}
+	return &Client{
+		dashURL: dashURL,
+		mtlsURL: mtlsURL,
+		http:    &http.Client{Timeout: 30 * time.Second, Transport: transport},
+		useMTLS: true,
+	}, nil
+}
+
+// baseURL returns the appropriate base URL for the given path.
+// Discovery API paths (/api/v1/discovery/...) go to the mTLS endpoint when active.
+func (c *Client) baseURL(path string) string {
+	if c.useMTLS && c.mtlsURL != "" {
+		return c.mtlsURL
+	}
+	return c.dashURL
 }
 
 // Region is one entry from GET /api/v1/regions.
@@ -145,12 +201,19 @@ func (c *Client) MarkDomainScanned(domain, status, scanErr string) error {
 	return c.post("/api/v1/discovery/domains/scanned", body, nil)
 }
 
+func (c *Client) addAuth(req *http.Request) {
+	if !c.useMTLS && c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	// mTLS: auth is the client cert presented at TLS layer — no header needed.
+}
+
 func (c *Client) delete(path string) error {
-	req, err := http.NewRequest(http.MethodDelete, c.baseURL+path, nil)
+	req, err := http.NewRequest(http.MethodDelete, c.baseURL(path)+path, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	c.addAuth(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("DELETE %s: %w", path, err)
@@ -164,11 +227,11 @@ func (c *Client) delete(path string) error {
 }
 
 func (c *Client) get(path string, out any) error {
-	req, err := http.NewRequest(http.MethodGet, c.baseURL+path, nil)
+	req, err := http.NewRequest(http.MethodGet, c.baseURL(path)+path, nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	c.addAuth(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("GET %s: %w", path, err)
@@ -182,11 +245,11 @@ func (c *Client) get(path string, out any) error {
 }
 
 func (c *Client) post(path string, body []byte, out any) error {
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, c.baseURL(path)+path, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	c.addAuth(req)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {

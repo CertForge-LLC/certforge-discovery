@@ -101,8 +101,9 @@ func cmdEnroll(args []string) {
 	}
 
 	var result struct {
-		CertPEM string `json:"cert_pem"`
-		CAPEM   string `json:"ca_pem"`
+		CertPEM      string `json:"cert_pem"`
+		CAPEM        string `json:"ca_pem"`
+		MTLSEndpoint string `json:"mtls_endpoint"` // host:port for mTLS (e.g. usagent.certgov.app:8443)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		log.Fatalf("decode response: %v", err)
@@ -133,12 +134,15 @@ func cmdEnroll(args []string) {
 	cert, _ := x509.ParseCertificate(certBlock.Bytes)
 
 	fmt.Println("\n✅ Enrollment successful!")
-	fmt.Printf("   Client cert: %s\n", certPath)
-	fmt.Printf("   Client key:  %s\n", keyPath)
-	fmt.Printf("   CA cert:     %s\n", caPath)
+	fmt.Printf("   Client cert:   %s\n", certPath)
+	fmt.Printf("   Client key:    %s\n", keyPath)
+	fmt.Printf("   CA cert:       %s\n", caPath)
 	if cert != nil {
-		fmt.Printf("   Valid until: %s\n", cert.NotAfter.Format("2006-01-02"))
-		fmt.Printf("   CN:          %s\n", cert.Subject.CommonName)
+		fmt.Printf("   Valid until:   %s\n", cert.NotAfter.Format("2006-01-02"))
+		fmt.Printf("   CN:            %s\n", cert.Subject.CommonName)
+	}
+	if result.MTLSEndpoint != "" {
+		fmt.Printf("   mTLS endpoint: %s\n", result.MTLSEndpoint)
 	}
 
 	// 5. Update the config file if it exists.
@@ -154,6 +158,20 @@ func cmdEnroll(args []string) {
 	cfg.MTLSPort = *mtlsPort
 	cfg.ClientCertFile = certPath
 	cfg.ClientKeyFile = keyPath
+	// MTLSHost: the server returns a direct-DNS hostname that bypasses Cloudflare
+	// (e.g. usagent.certgov.app). Parse it from the host:port endpoint string.
+	// If the server didn't return one, clear any previous value so the fallback
+	// (derive from CertForgeURL) is used.
+	if result.MTLSEndpoint != "" {
+		host := result.MTLSEndpoint
+		// Strip the port suffix, e.g. "usagent.certgov.app:8443" → "usagent.certgov.app"
+		if i := strings.LastIndex(host, ":"); i > strings.LastIndex(host, "]") {
+			host = host[:i]
+		}
+		cfg.MTLSHost = host
+	} else {
+		cfg.MTLSHost = ""
+	}
 	// The CA cert returned by enrollment is the agent client CA (the CA that signed
 	// the cert we just received). It's saved for reference. For mTLS server
 	// verification, system trust is used when the server has an ACME cert (SaaS).

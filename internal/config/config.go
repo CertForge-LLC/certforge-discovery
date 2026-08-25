@@ -22,6 +22,7 @@ type Config struct {
 	CertForgeURL     string             `yaml:"certforge_url"`      // e.g. https://app.certgovernance.app
 	APIKey           string             `yaml:"api_key"`            // bearer token (legacy; superseded by mTLS cert)
 	MTLSPort         int                `yaml:"mtls_port"`          // CertForge mTLS port (default 8443)
+	MTLSHost         string             `yaml:"mtls_host"`          // direct-DNS hostname for mTLS (e.g. usagent.certgov.app); overrides host from CertForgeURL
 	ClientCertFile   string             `yaml:"client_cert"`        // path to mTLS client cert PEM (from enroll)
 	ClientKeyFile    string             `yaml:"client_key"`         // path to mTLS client key PEM (from enroll)
 	ServerCAFile     string             `yaml:"server_ca"`          // path to CertForge client CA PEM (from enroll)
@@ -35,15 +36,21 @@ type Config struct {
 }
 
 // MTLSEndpoint returns the base URL for the mTLS API (separate port from the dashboard).
+// When MTLSHost is set (written by "enroll" from the server's enrollment response), it
+// is used as the hostname so agents bypass Cloudflare and hit the server directly.
+// Falls back to deriving the host from CertForgeURL for backward compatibility.
 func (c *Config) MTLSEndpoint() string {
 	port := c.MTLSPort
 	if port == 0 {
 		port = 8443
 	}
-	// Strip scheme+host from CertForgeURL and rebuild with mTLS port.
+	// Prefer the direct-DNS mTLS host returned at enrollment time.
+	if c.MTLSHost != "" {
+		return fmt.Sprintf("https://%s:%d", c.MTLSHost, port)
+	}
+	// Legacy fallback: derive host from CertForgeURL.
 	// e.g. https://app.certgovernance.app → https://app.certgovernance.app:8443
 	base := c.CertForgeURL
-	// Remove any existing port from the host.
 	if idx := indexAfterScheme(base); idx >= 0 {
 		host := base[idx:]
 		if i := lastColon(host); i >= 0 {

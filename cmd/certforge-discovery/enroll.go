@@ -145,15 +145,21 @@ func cmdEnroll(args []string) {
 	cfg, loadErr := config.Load(*cfgPath)
 	if loadErr != nil {
 		// Config doesn't exist yet — create a minimal one.
-		cfg = &config.Config{
-			CertForgeURL: *certforgeURL,
-			MTLSPort:     *mtlsPort,
-		}
+		cfg = &config.Config{}
 	}
+	// Always update the URL and mTLS port from the flags so the agent talks to the
+	// same server the enrollment was performed against — not a stale URL from a
+	// previous setup or a different region.
+	cfg.CertForgeURL = *certforgeURL
+	cfg.MTLSPort = *mtlsPort
 	cfg.ClientCertFile = certPath
 	cfg.ClientKeyFile = keyPath
-	cfg.ServerCAFile = caPath
-	cfg.MTLSPort = *mtlsPort
+	// The CA cert returned by enrollment is the agent client CA (the CA that signed
+	// the cert we just received). It's saved for reference. For mTLS server
+	// verification, system trust is used when the server has an ACME cert (SaaS).
+	// Self-hosted deployments with a self-signed mTLS server cert should set
+	// server_ca in the config to the server's cert/CA for pinning.
+	cfg.ServerCAFile = ""  // cleared — use system trust; saved CA cert is still on disk
 	// Keep api_key if it was set — it's used as a fallback until all endpoints migrate.
 	if err := config.Save(*cfgPath, cfg); err != nil {
 		fmt.Printf("   Warning: could not update config: %v\n", err)

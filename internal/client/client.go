@@ -49,6 +49,10 @@ func NewMTLS(dashURL, mtlsURL, certFile, keyFile, caFile string) (*Client, error
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{clientCert},
 		MinVersion:   tls.VersionTLS12,
+		// RootCAs is set only when a custom server CA is provided (self-hosted deployments
+		// with a self-signed mTLS server cert). When empty, the system trust store is used
+		// — this is the right default for SaaS deployments where the mTLS server presents
+		// an ACME/Let's Encrypt cert that is already trusted by the OS.
 	}
 	if caFile != "" {
 		caPEM, err := os.ReadFile(caFile)

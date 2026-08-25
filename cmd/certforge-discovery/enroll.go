@@ -82,6 +82,7 @@ func cmdEnroll(args []string) {
 	payload, _ := json.Marshal(map[string]string{
 		"token":   *token,
 		"csr_pem": csrPEM,
+		"label":   *label,
 	})
 	hc := &http.Client{
 		Timeout: 30 * time.Second,
@@ -165,6 +166,13 @@ func cmdEnroll(args []string) {
 	}
 	fmt.Println("\nThe agent will now use mTLS for all CertForge communication.")
 	fmt.Println("Your api_key is no longer required and can be removed from the config.")
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Println("  Run a one-off scan:")
+	fmt.Println("    certforge-discovery scan -domain example.com")
+	fmt.Println()
+	fmt.Println("  Or start the agent (polls on your configured interval):")
+	fmt.Println("    certforge-discovery agent")
 }
 
 func buildMTLSURL(baseURL string, port int) string {

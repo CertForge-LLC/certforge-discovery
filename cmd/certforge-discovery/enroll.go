@@ -160,7 +160,7 @@ func cmdEnroll(args []string) {
 	// Self-hosted deployments with a self-signed mTLS server cert should set
 	// server_ca in the config to the server's cert/CA for pinning.
 	cfg.ServerCAFile = ""  // cleared — use system trust; saved CA cert is still on disk
-	// Keep api_key if it was set — it's used as a fallback until all endpoints migrate.
+	cfg.APIKey = ""        // cleared — mTLS client cert is the credential from this point on
 	if err := config.Save(*cfgPath, cfg); err != nil {
 		fmt.Printf("   Warning: could not update config: %v\n", err)
 		fmt.Println("   Add these lines to your config manually:")

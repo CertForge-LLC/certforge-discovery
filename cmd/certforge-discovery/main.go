@@ -299,7 +299,7 @@ func cmdAgent(args []string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Printf("[agent] starting — polling %s every %s", opts.cfg.CertForgeURL, opts.cfg.PollInterval)
+	log.Printf("[agent] starting v%s — polling %s every %s", Version, opts.cfg.CertForgeURL, opts.cfg.PollInterval)
 
 	if certs, err := runScan(ctx, opts); err != nil {
 		log.Printf("[agent] scan error: %v", err)

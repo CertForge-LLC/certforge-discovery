@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -176,9 +177,14 @@ func cmdEnroll(args []string) {
 	// (derive from CertForgeURL) is used.
 	if result.MTLSEndpoint != "" {
 		host := result.MTLSEndpoint
-		// Strip the port suffix, e.g. "usagent.certgov.app:8443" → "usagent.certgov.app"
+		// Parse both host and port from the server's returned endpoint (e.g. "usagent.certgov.app:8444").
+		// The server knows its own mTLS port; use it instead of the -mtls-port flag default.
 		if i := strings.LastIndex(host, ":"); i > strings.LastIndex(host, "]") {
+			portStr := host[i+1:]
 			host = host[:i]
+			if p, convErr := strconv.Atoi(portStr); convErr == nil && p > 0 {
+				cfg.MTLSPort = p
+			}
 		}
 		cfg.MTLSHost = host
 	} else {

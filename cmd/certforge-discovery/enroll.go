@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/certforge-llc/certforge-discovery/internal/config"
@@ -27,8 +28,8 @@ import (
 func cmdEnroll(args []string) {
 	fs := flag.NewFlagSet("enroll", flag.ExitOnError)
 	token := fs.String("token", "", "one-time enrollment token from CertForge Settings (required)")
-	certforgeURL := fs.String("url", defaultBaseURL, "CertForge URL")
-	mtlsPort := fs.Int("mtls-port", 8443, "CertForge mTLS port")
+	certforgeURL := fs.String("url", defaultBaseURL, "CertForge URL (dashboard port, e.g. https://app.certgov.app)")
+	mtlsPort := fs.Int("mtls-port", 8443, "CertForge mTLS port (used after enrollment, not for the enroll call itself)")
 	cfgPath := fs.String("config", config.DefaultPath(), "config file path to update after enrollment")
 	label := fs.String("label", "discovery", "label for this agent in CertForge")
 	_ = fs.Parse(args)
@@ -69,11 +70,13 @@ func cmdEnroll(args []string) {
 	}
 	csrPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER}))
 
-	// 3. POST to /v1/agent/enroll on the mTLS port.
-	// The endpoint is accessible without a client cert (it's the bootstrap point).
-	// We use InsecureSkipVerify here only for the enrollment call because we don't
-	// have the CA cert yet; the returned CA cert is saved and used for all future calls.
-	enrollURL := buildMTLSURL(*certforgeURL, *mtlsPort) + "/v1/agent/enroll"
+	// 3. POST to /v1/agent/enroll on the regular HTTPS port (443 via reverse proxy).
+	// Enrollment is a bootstrap call — the client doesn't have a cert yet, so it
+	// cannot connect to the mTLS port (which requires a client cert). The OTP in the
+	// request body authenticates this call. InsecureSkipVerify is used here only
+	// because we don't yet have the server CA pinned; the CA cert returned in the
+	// response is saved and used for all future mTLS calls.
+	enrollURL := strings.TrimRight(*certforgeURL, "/") + "/v1/agent/enroll"
 	fmt.Printf("Enrolling with CertForge at %s...\n", enrollURL)
 
 	payload, _ := json.Marshal(map[string]string{

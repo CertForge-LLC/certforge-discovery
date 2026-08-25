@@ -101,9 +101,10 @@ func cmdEnroll(args []string) {
 	}
 
 	var result struct {
-		CertPEM      string `json:"cert_pem"`
-		CAPEM        string `json:"ca_pem"`
-		MTLSEndpoint string `json:"mtls_endpoint"` // host:port for mTLS (e.g. usagent.certgov.app:8443)
+		CertPEM        string `json:"cert_pem"`
+		CAPEM          string `json:"ca_pem"`
+		MTLSEndpoint   string `json:"mtls_endpoint"`    // host:port for mTLS (e.g. usagent.certgov.app:8443)
+		MTLSServerCert string `json:"mtls_server_cert"` // mTLS server TLS cert PEM — pin for server verification
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		log.Fatalf("decode response: %v", err)
@@ -128,6 +129,14 @@ func cmdEnroll(args []string) {
 	if err := os.WriteFile(caPath, []byte(result.CAPEM), 0600); err != nil {
 		log.Fatalf("write CA cert: %v", err)
 	}
+	// Save the mTLS server's TLS cert for pinning. The agent uses this to verify
+	// the server on port 8443 instead of the system trust store.
+	serverCertPath := filepath.Join(storageDir, "certforge-server.crt")
+	if result.MTLSServerCert != "" {
+		if err := os.WriteFile(serverCertPath, []byte(result.MTLSServerCert), 0600); err != nil {
+			log.Fatalf("write server cert: %v", err)
+		}
+	}
 
 	// Parse and show cert details.
 	certBlock, _ := pem.Decode([]byte(result.CertPEM))
@@ -137,6 +146,9 @@ func cmdEnroll(args []string) {
 	fmt.Printf("   Client cert:   %s\n", certPath)
 	fmt.Printf("   Client key:    %s\n", keyPath)
 	fmt.Printf("   CA cert:       %s\n", caPath)
+	if result.MTLSServerCert != "" {
+		fmt.Printf("   Server cert:   %s  (pinned for mTLS verification)\n", serverCertPath)
+	}
 	if cert != nil {
 		fmt.Printf("   Valid until:   %s\n", cert.NotAfter.Format("2006-01-02"))
 		fmt.Printf("   CN:            %s\n", cert.Subject.CommonName)
@@ -172,13 +184,15 @@ func cmdEnroll(args []string) {
 	} else {
 		cfg.MTLSHost = ""
 	}
-	// The CA cert returned by enrollment is the agent client CA (the CA that signed
-	// the cert we just received). It's saved for reference. For mTLS server
-	// verification, system trust is used when the server has an ACME cert (SaaS).
-	// Self-hosted deployments with a self-signed mTLS server cert should set
-	// server_ca in the config to the server's cert/CA for pinning.
-	cfg.ServerCAFile = ""  // cleared — use system trust; saved CA cert is still on disk
-	cfg.APIKey = ""        // cleared — mTLS client cert is the credential from this point on
+	// Pin the mTLS server's TLS cert: the server always uses a self-signed cert on
+	// port 8443, so we save it and point server_ca at it. The mTLS client uses this
+	// instead of the system trust store for server verification.
+	if result.MTLSServerCert != "" {
+		cfg.ServerCAFile = serverCertPath
+	} else {
+		cfg.ServerCAFile = "" // fallback: system trust (older server)
+	}
+	cfg.APIKey = "" // cleared — mTLS client cert is the credential from this point on
 	if err := config.Save(*cfgPath, cfg); err != nil {
 		fmt.Printf("   Warning: could not update config: %v\n", err)
 		fmt.Println("   Add these lines to your config manually:")

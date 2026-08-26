@@ -1,6 +1,6 @@
 # certforge-discovery
 
-Certificate discovery agent for [CertForge](https://certgovernance.app). Finds TLS certificates across your infrastructure and reports them to CertForge for governance, expiry tracking, and compliance.
+Certificate discovery agent for [CertForge](https://certgov.app). Finds TLS certificates across your infrastructure and reports them to CertForge for governance, expiry tracking, and compliance.
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
@@ -67,21 +67,42 @@ certforge-discovery scan -domain example.com -target 10.0.1.0/24 -local -k8s -ou
 
 ### With a CertForge account
 
-**1. Run setup** — picks your data region and connects to your CertForge account:
+**Option A — mTLS enrollment (recommended)**
+
+mTLS connects directly to the CertForge agent endpoint on port 8443, bypassing Cloudflare.
+
+1. Go to **Integrations → Connector Agents** in CertForge
+2. Click **+ Enroll Agent** and choose type **Discovery**
+3. Give it a label (e.g. `prod-scanner`) and copy the one-time token
+
+```bash
+certforge-discovery enroll \
+  -token  <one-time-token>        \
+  -url    https://app.certgov.app \
+  -label  prod-scanner
+```
+
+This writes `client.crt`, `client.key`, and `server.crt` to `~/.certforge-discovery/` and updates `~/.certforge-discovery/config.yaml` with the `mtls_*` fields automatically.
+
+**Option B — API key setup (legacy)**
 
 ```bash
 certforge-discovery setup
 ```
 
-**2. Run a scan:**
+Picks your data region and writes an API key to `~/.certforge-discovery/config.yaml`.
+
+---
+
+**Run a scan:**
 
 ```bash
 certforge-discovery scan
 ```
 
-Results appear immediately in CertForge → Discovery.
+Results appear immediately in **CertForge → Discovery**.
 
-**3. Run continuously** (recommended — polls on the configured interval, default 6h):
+**Run continuously** (recommended — re-scans on the configured interval, default 6h):
 
 ```bash
 certforge-discovery agent
@@ -103,14 +124,32 @@ certforge-discovery agent
 
 ## Configuration
 
-Setup writes a config file to `~/.certforge-discovery/config.yaml`:
+The config file lives at `~/.certforge-discovery/config.yaml` by default. Override with `-config <path>`.
 
 ```yaml
-certforge_url: https://app.certgovernance.app  # your region's URL
-api_key: cf_...                                 # from CertForge Settings → API Keys
-poll_interval: 6h                               # how often agent re-scans
+# URL of your CertForge instance (US East or EU West).
+certforge_url: https://app.certgov.app
 
-# Optional
+# ── Authentication — choose one ──────────────────────────────────────────────
+
+# Option A: mTLS client certificate (recommended)
+# Written by: certforge-discovery enroll -token <otp> -url ... -label ...
+mtls_host: usagent.certgov.app   # printed by the enroll command
+mtls_port: 8443                   # 8443 prod · 8444 preview/dev
+mtls_cert: ~/.certforge-discovery/client.crt
+mtls_key:  ~/.certforge-discovery/client.key
+mtls_ca:   ~/.certforge-discovery/server.crt
+
+# Option B: API key (legacy — comment out the mtls_* lines, uncomment below)
+# api_key: cf_...                 # from CertForge Settings → API Keys
+
+# ── Poll interval ─────────────────────────────────────────────────────────────
+
+# How often the agent re-scans in continuous mode (default 6h).
+poll_interval: 6h
+
+# ── Optional scan settings ────────────────────────────────────────────────────
+
 scan_local: false        # scan local filesystem for cert files
 scan_k8s: false          # scan Kubernetes TLS secrets
 kubeconfig: ""           # path to kubeconfig; empty = in-cluster config
@@ -121,13 +160,15 @@ storage_paths:           # additional filesystem paths to scan (beyond the defau
   - /opt/app/certs
 ```
 
-**Local filesystem scan paths:** by default the agent scans `/etc/ssl/certs`, `/etc/nginx/ssl`, `/etc/nginx/certs`, `/etc/apache2/ssl`, `/etc/httpd/ssl`, `/etc/letsencrypt/live`, `/etc/letsencrypt/archive`, and `/etc/pki/tls/certs`. `/etc/ssl/private` is intentionally excluded — it contains private keys, not certificates. Add it explicitly via `storage_paths` if you have a specific need, but note it typically requires root access.
+**Local filesystem scan paths:** by default the agent scans `/etc/ssl/certs`, `/etc/nginx/ssl`, `/etc/nginx/certs`, `/etc/apache2/ssl`, `/etc/httpd/ssl`, `/etc/letsencrypt/live`, `/etc/letsencrypt/archive`, and `/etc/pki/tls/certs`. `/etc/ssl/private` is intentionally excluded — it contains private keys, not certificates.
 
-**EU West (GDPR) example:**
+**EU West (GDPR):**
 
 ```yaml
-certforge_url: https://eu.certgovernance.app
-api_key: cf_...
+certforge_url: https://eu.certgov.app
+mtls_host: eu-agent.certgov.app
+mtls_port: 8443
+# ... or api_key: cf_... for legacy auth
 poll_interval: 6h
 ```
 
@@ -153,9 +194,21 @@ sudo systemctl enable --now certforge-discovery
 
 ## Running in Docker
 
+**mTLS auth (recommended):**
+
+```bash
+# Write config from certforge-discovery enroll to /etc/certforge-discovery/
+docker run -d --name certforge-discovery \
+  -v /etc/certforge-discovery:/etc/certforge-discovery:ro \
+  ghcr.io/certforge-llc/certforge-discovery:latest \
+  agent -config /etc/certforge-discovery/config.yaml
+```
+
+**API key auth (legacy):**
+
 ```bash
 docker run -d --name certforge-discovery \
-  -e CERTFORGE_URL=https://app.certgovernance.app \
+  -e CERTFORGE_URL=https://app.certgov.app \
   -e API_KEY=cf_... \
   -v /etc/certforge-discovery/config.yaml:/etc/certforge-discovery/config.yaml:ro \
   ghcr.io/certforge-llc/certforge-discovery:latest
@@ -165,20 +218,77 @@ For local filesystem scanning, mount the paths you want scanned:
 
 ```bash
 docker run -d --name certforge-discovery \
-  -v /etc/certforge-discovery/config.yaml:/etc/certforge-discovery/config.yaml:ro \
+  -v /etc/certforge-discovery:/etc/certforge-discovery:ro \
   -v /etc/ssl/certs:/etc/ssl/certs:ro \
   -v /etc/nginx/ssl:/etc/nginx/ssl:ro \
   ghcr.io/certforge-llc/certforge-discovery:latest \
-  agent -local
+  agent -config /etc/certforge-discovery/config.yaml -local
 ```
 
 Build from source:
 
 ```bash
-docker build --build-arg VERSION=v0.1.9 -t certforge-discovery:latest .
+docker build --build-arg VERSION=v0.1.20 -t certforge-discovery:latest .
 ```
 
 ## Running in Kubernetes
+
+**mTLS auth (recommended):**
+
+Store the mTLS credentials from `certforge-discovery enroll` in a Secret:
+
+```bash
+kubectl create secret generic certforge-discovery-mtls \
+  --namespace certforge-system \
+  --from-file=client.crt=~/.certforge-discovery/client.crt \
+  --from-file=client.key=~/.certforge-discovery/client.key \
+  --from-file=server.crt=~/.certforge-discovery/server.crt
+```
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: certforge-discovery
+  namespace: certforge-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: certforge-discovery
+  template:
+    metadata:
+      labels:
+        app: certforge-discovery
+    spec:
+      serviceAccountName: certforge-discovery
+      volumes:
+        - name: mtls
+          secret:
+            secretName: certforge-discovery-mtls
+      containers:
+        - name: agent
+          image: ghcr.io/certforge-llc/certforge-discovery:latest
+          volumeMounts:
+            - name: mtls
+              mountPath: /etc/certforge-discovery/creds
+              readOnly: true
+          env:
+            - name: CERTFORGE_URL
+              value: https://app.certgov.app
+            - name: MTLS_HOST
+              value: usagent.certgov.app
+            - name: MTLS_PORT
+              value: "8443"
+            - name: MTLS_CERT
+              value: /etc/certforge-discovery/creds/client.crt
+            - name: MTLS_KEY
+              value: /etc/certforge-discovery/creds/client.key
+            - name: MTLS_CA
+              value: /etc/certforge-discovery/creds/server.crt
+```
+
+**API key auth (legacy):**
 
 ```yaml
 apiVersion: apps/v1
@@ -202,7 +312,7 @@ spec:
           image: ghcr.io/certforge-llc/certforge-discovery:latest
           env:
             - name: CERTFORGE_URL
-              value: https://app.certgovernance.app
+              value: https://app.certgov.app
             - name: API_KEY
               valueFrom:
                 secretKeyRef:
@@ -301,7 +411,7 @@ The output is the verbatim request body. You can confirm it contains only the fi
 
 certforge-discovery sends certificate metadata only to your configured `certforge_url`. No certificate private keys are ever read or transmitted — the agent only reads the public certificate portion of TLS secrets and cert files.
 
-Your data stays in the region you chose during setup. See [CertForge data residency](https://docs.certgovernance.app/architecture) for details.
+Your data stays in the region you chose during setup. See [CertForge data residency](https://docs.certgov.app/architecture) for details.
 
 ## License
 

@@ -1,0 +1,71 @@
+# certforge-discovery configuration
+# Default location: ~/.certforge-discovery/config.yaml
+# Override with: certforge-discovery agent -config /path/to/config.yaml
+
+# ─── Connection ───────────────────────────────────────────────────────────────
+
+# URL of your CertForge instance (US East or EU West).
+certforge_url: https://app.certgov.app   # EU: https://eu.certgov.app
+
+# ─── Authentication — choose ONE option ───────────────────────────────────────
+
+# Option A: mTLS client certificate (recommended)
+# Connects directly to the CertForge agent endpoint, bypassing Cloudflare.
+# Run the enroll command to generate credentials and update this config automatically:
+#
+#   certforge-discovery enroll \
+#     -token <one-time-token>   \  # from CertForge → Integrations → Connector Agents → Enroll
+#     -url   <certforge-url>    \
+#     -label <name>                # e.g. prod-scanner
+#
+# The enroll command writes the credentials and updates this file automatically.
+#
+# mtls_host: usagent.certgov.app   # direct-DNS hostname printed by enroll
+# mtls_port: 8443                  # 8443 prod · 8444 dev/preview
+# mtls_cert: ~/.certforge-discovery/client.crt
+# mtls_key:  ~/.certforge-discovery/client.key
+# mtls_ca:   ~/.certforge-discovery/server.crt  # pinned server cert
+
+# Option B: API key (legacy — comment out the mtls_* lines, uncomment below)
+# Run `certforge-discovery setup` to choose a region and populate this automatically.
+# api_key: cf_...   # from CertForge Settings → API Keys
+
+# ─── Poll interval ────────────────────────────────────────────────────────────
+
+# How often the agent re-scans in continuous mode.
+# Accepts Go duration strings: 1h, 30m, 6h, 24h (default 6h).
+poll_interval: 6h
+
+# ─── Scan sources (optional) ──────────────────────────────────────────────────
+
+# Scan local filesystem for certificate files.
+# Checks: /etc/ssl/certs, /etc/nginx/ssl, /etc/letsencrypt, /etc/pki/tls/certs, etc.
+scan_local: false
+
+# Scan Kubernetes TLS secrets (kubernetes.io/tls type) across namespaces.
+# Requires RBAC: secrets get/list on target namespaces.
+scan_k8s: false
+
+# Path to kubeconfig. Leave empty to use in-cluster config (ServiceAccount token).
+kubeconfig: ""
+
+# Limit Kubernetes scanning to specific namespaces.
+# Leave empty to scan all namespaces (requires ClusterRole with secrets list permission).
+k8s_namespaces: []
+#  - default
+#  - production
+
+# Additional filesystem paths to scan beyond the defaults.
+storage_paths: []
+#  - /opt/app/certs
+#  - /srv/tls
+
+# ─── Private CA awareness (optional) ──────────────────────────────────────────
+#
+# Tag discovered certs as issuer_type=internal_ca when they were signed by
+# one of these CAs. Helps your team distinguish internal issuance from
+# shadow IT or public CAs in the CertForge Discovery view.
+#
+# known_internal_cas:
+#   - cert: /etc/ssl/private/corp-ca.crt   # PEM CA certificate
+#     label: "Corp Internal CA"

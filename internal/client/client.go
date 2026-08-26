@@ -21,15 +21,17 @@ type Client struct {
 	dashURL string // dashboard base URL (bearer token path)
 	mtlsURL string // mTLS server base URL (e.g. https://host:8443)
 	apiKey  string // bearer token (empty when using mTLS)
+	version string // binary version reported via X-Agent-Version header
 	http    *http.Client
 	useMTLS bool
 }
 
 // New returns a bearer-token client (legacy mode).
-func New(baseURL, apiKey string) *Client {
+func New(baseURL, apiKey, version string) *Client {
 	return &Client{
 		dashURL: baseURL,
 		apiKey:  apiKey,
+		version: version,
 		http:    &http.Client{Timeout: 30 * time.Second},
 		useMTLS: false,
 	}
@@ -40,7 +42,7 @@ func New(baseURL, apiKey string) *Client {
 // caFile is the path to the CertForge client CA PEM (for server cert pinning on the mTLS port).
 // dashURL is the dashboard base URL (for endpoints not yet on the mTLS server).
 // mtlsURL is the base URL of the mTLS server (e.g. https://host:8443).
-func NewMTLS(dashURL, mtlsURL, certFile, keyFile, caFile string) (*Client, error) {
+func NewMTLS(dashURL, mtlsURL, certFile, keyFile, caFile, version string) (*Client, error) {
 	clientCert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		return nil, fmt.Errorf("load client cert: %w", err)
@@ -70,6 +72,7 @@ func NewMTLS(dashURL, mtlsURL, certFile, keyFile, caFile string) (*Client, error
 	return &Client{
 		dashURL: dashURL,
 		mtlsURL: mtlsURL,
+		version: version,
 		http:    &http.Client{Timeout: 30 * time.Second, Transport: transport},
 		useMTLS: true,
 	}, nil
@@ -210,6 +213,9 @@ func (c *Client) addAuth(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 	// mTLS: auth is the client cert presented at TLS layer — no header needed.
+	if c.version != "" {
+		req.Header.Set("X-Agent-Version", c.version)
+	}
 }
 
 func (c *Client) delete(path string) error {

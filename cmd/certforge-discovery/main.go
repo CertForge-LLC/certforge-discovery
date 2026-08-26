@@ -154,7 +154,7 @@ func cmdSetup() {
 	}
 
 	fmt.Print("Verifying API key... ")
-	c := client.New(chosenURL, apiKey)
+	c := client.New(chosenURL, apiKey, "")
 	if _, err := c.GetConfig(); err != nil {
 		fmt.Println("failed.")
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -256,7 +256,7 @@ func cmdRoll() {
 	// For the verification step use a fresh bearer-token client with the new key —
 	// mTLS auth is keyed to the certificate, not the API key, so a key-roll check
 	// always goes through the bearer path regardless of what the config says.
-	c := client.New(cfg.CertForgeURL, newKey)
+	c := client.New(cfg.CertForgeURL, newKey, "")
 	if _, err := c.GetConfig(); err != nil {
 		fmt.Println("failed.")
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -396,9 +396,10 @@ func newClient(cfg *config.Config) (*client.Client, error) {
 			cfg.ClientCertFile,
 			cfg.ClientKeyFile,
 			cfg.ServerCAFile,
+			Version,
 		)
 	}
-	return client.New(cfg.CertForgeURL, cfg.APIKey), nil
+	return client.New(cfg.CertForgeURL, cfg.APIKey, Version), nil
 }
 
 // ── core scan logic ───────────────────────────────────────────────────────────

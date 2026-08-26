@@ -389,8 +389,10 @@ func parseScanFlags(cmd string, args []string) scanOpts {
 // the legacy bearer-token path.  Errors are returned so callers can decide
 // whether to fatal or log-and-continue.
 func newClient(cfg *config.Config) (*client.Client, error) {
+	var c *client.Client
+	var err error
 	if cfg.ClientCertFile != "" {
-		return client.NewMTLS(
+		c, err = client.NewMTLS(
 			cfg.CertForgeURL,
 			cfg.MTLSEndpoint(),
 			cfg.ClientCertFile,
@@ -398,8 +400,13 @@ func newClient(cfg *config.Config) (*client.Client, error) {
 			cfg.ServerCAFile,
 			Version,
 		)
+	} else {
+		c = client.New(cfg.CertForgeURL, cfg.APIKey, Version)
 	}
-	return client.New(cfg.CertForgeURL, cfg.APIKey, Version), nil
+	if err == nil && cfg.PollInterval > 0 {
+		c.SetPollInterval(int(cfg.PollInterval.Seconds()))
+	}
+	return c, err
 }
 
 // ── core scan logic ───────────────────────────────────────────────────────────

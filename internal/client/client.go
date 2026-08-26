@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -18,12 +19,21 @@ import (
 //   - mTLS (preferred): set clientCert + serverCA; uses the mTLS endpoint (mtlsURL).
 //     When mTLS is active, apiKey is ignored and requests go to the mTLS port.
 type Client struct {
-	dashURL string // dashboard base URL (bearer token path)
-	mtlsURL string // mTLS server base URL (e.g. https://host:8443)
-	apiKey  string // bearer token (empty when using mTLS)
-	version string // binary version reported via X-Agent-Version header
-	http    *http.Client
-	useMTLS bool
+	dashURL      string // dashboard base URL (bearer token path)
+	mtlsURL      string // mTLS server base URL (e.g. https://host:8443)
+	apiKey       string // bearer token (empty when using mTLS)
+	version      string // binary version reported via X-Agent-Version header
+	pollInterval string // poll interval reported via X-Poll-Interval header (seconds)
+	http         *http.Client
+	useMTLS      bool
+}
+
+// SetPollInterval records the agent's configured poll interval (in seconds) so it is
+// reported to CertForge via X-Poll-Interval on every request. 0 means "unset / don't report".
+func (c *Client) SetPollInterval(seconds int) {
+	if seconds > 0 {
+		c.pollInterval = strconv.Itoa(seconds)
+	}
 }
 
 // New returns a bearer-token client (legacy mode).
@@ -215,6 +225,9 @@ func (c *Client) addAuth(req *http.Request) {
 	// mTLS: auth is the client cert presented at TLS layer — no header needed.
 	if c.version != "" {
 		req.Header.Set("X-Agent-Version", c.version)
+	}
+	if c.pollInterval != "" {
+		req.Header.Set("X-Poll-Interval", c.pollInterval)
 	}
 }
 

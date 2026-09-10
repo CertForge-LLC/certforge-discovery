@@ -7,10 +7,13 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/certforge-llc/certforge-discovery/internal/client"
 )
+
+const tlsConcurrency = 50 // parallel TLS probes; each holds a connection for ≤2s
 
 // ScanTLSTarget connects to each host:port derived from target and returns
 // the leaf certificates presented. Handles single hostnames, IPs, and CIDR ranges.
@@ -32,19 +35,51 @@ func ScanTLSTarget(ctx context.Context, target, ports string, knownCAs []*x509.C
 		log.Printf("[tls] %s: probing %d host(s) on port(s) %s", target, total, ports)
 	}
 
-	var certs []client.Cert
+	type result struct {
+		idx   int
+		certs []client.Cert
+	}
+
+	resultsCh := make(chan result, total)
+	sem := make(chan struct{}, tlsConcurrency)
+	var wg sync.WaitGroup
+
 	for i, host := range hosts {
 		if ctx.Err() != nil {
-			return certs
+			break
 		}
-		for _, port := range portList {
-			c := probeTLS(ctx, host, port, knownCAs)
-			certs = append(certs, c...)
+		wg.Add(1)
+		go func(idx int, h string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			var found []client.Cert
+			for _, port := range portList {
+				found = append(found, probeTLS(ctx, h, port, knownCAs)...)
+			}
+			resultsCh <- result{idx: idx, certs: found}
+		}(i, host)
+	}
+
+	// Close results channel once all workers finish.
+	go func() { wg.Wait(); close(resultsCh) }()
+
+	// Collect results and log progress every 16 completions.
+	allCerts := make([][]client.Cert, total)
+	done := 0
+	totalFound := 0
+	for r := range resultsCh {
+		allCerts[r.idx] = r.certs
+		totalFound += len(r.certs)
+		done++
+		if total > 16 && done%16 == 0 {
+			log.Printf("[tls] %s: %d/%d hosts probed, %d cert(s) found so far", target, done, total, totalFound)
 		}
-		// Print progress every 16 hosts so a /24 gets ~16 updates without flooding.
-		if total > 16 && (i+1)%16 == 0 {
-			log.Printf("[tls] %s: %d/%d hosts probed, %d cert(s) found so far", target, i+1, total, len(certs))
-		}
+	}
+
+	var certs []client.Cert
+	for _, c := range allCerts {
+		certs = append(certs, c...)
 	}
 
 	if total > 1 {

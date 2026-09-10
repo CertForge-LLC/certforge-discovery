@@ -22,8 +22,9 @@ const (
 	crtshApexURL      = "https://crt.sh/?q=%s&output=json&exclude=expired"
 	crtshCertURL      = "https://crt.sh/?d=%s"
 
-	crtshTimeout    = 90 * time.Second
-	ekuConcurrency  = 5
+	crtshListTimeout = 90 * time.Second // timeout for the initial crt.sh listing call
+	crtshCertTimeout = 15 * time.Second // timeout per individual cert download (EKU enrichment)
+	ekuConcurrency   = 10               // parallel EKU enrichment workers
 )
 
 type crtshEntry struct {
@@ -41,8 +42,11 @@ type crtshEntry struct {
 // are tagged IssuerType="internal_ca" (string match — CT log entries lack raw cert bytes
 // for cryptographic verification at the listing stage).
 func ScanCTLog(ctx context.Context, _ *http.Client, domain string, knownCAs []*x509.Certificate) ([]client.Cert, error) {
-	// Use a dedicated client with a longer timeout — crt.sh can be slow.
-	hc := &http.Client{Timeout: crtshTimeout}
+	// Separate clients: listing calls need a long timeout; individual cert
+	// downloads use a short timeout so a slow response fails fast and doesn't
+	// hold a concurrency slot for the full listing timeout.
+	hc    := &http.Client{Timeout: crtshListTimeout}
+	hcEKU := &http.Client{Timeout: crtshCertTimeout}
 
 	log.Printf("[ctlog] %s: querying crt.sh (subdomain)...", domain)
 	subEntries, err := fetchCRTSH(ctx, hc, fmt.Sprintf(crtshSubdomainURL, domain))
@@ -117,7 +121,7 @@ func ScanCTLog(ctx context.Context, _ *http.Client, domain string, knownCAs []*x
 			defer func() { <-sem }()
 
 			c := pp.cert
-			c.EKU = enrichEKU(ctx, hc, fmt.Sprintf("%d", pp.entry.ID))
+			c.EKU = enrichEKU(ctx, hcEKU, fmt.Sprintf("%d", pp.entry.ID))
 			certs[idx] = c
 
 			mu.Lock()

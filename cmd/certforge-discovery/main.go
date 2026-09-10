@@ -79,7 +79,8 @@ Scan flags:
   -domain <domain>         CT log scan for this domain (repeatable)
   -target <host>           TLS-scan this host, IP, or CIDR (repeatable)
   -ports <ports>           Ports for TLS scan (default: 443,8443)
-  -local                   Scan local filesystem for cert files
+  -local                   Scan local filesystem for cert files (Linux/macOS) or Windows
+                           Certificate Store, IIS, RDP, and netsh SSL bindings (Windows)
   -k8s                     Scan Kubernetes TLS secrets
   -k8s-namespace <ns>      Limit K8s scan to this namespace (repeatable; default: all namespaces)
   -out <file>              Write to file (.csv or .json); prints table to stdout if omitted
@@ -504,10 +505,13 @@ func runScan(ctx context.Context, opts scanOpts) ([]client.Cert, error) {
 		all = append(all, scan.ScanTLSTarget(ctx, t.target, t.ports, knownCAs)...)
 	}
 
-	// Local filesystem.
+	// Local scan: filesystem paths (Linux/macOS) and Windows cert store + bindings.
+	// Both run when -local is set; ScanWindowsLocal returns nil on non-Windows and
+	// ScanLocalFS finds nothing on Windows (Linux paths don't exist there).
 	if scanLocal {
 		log.Printf("[scan] local filesystem")
 		all = append(all, scan.ScanLocalFS(storagePaths, knownCAs)...)
+		all = append(all, scan.ScanWindowsLocal(knownCAs)...)
 	}
 
 	// Kubernetes secrets.

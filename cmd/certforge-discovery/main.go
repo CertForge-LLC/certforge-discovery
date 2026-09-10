@@ -30,6 +30,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Always print the version to stderr so it appears in logs regardless of subcommand.
+	// The "version" subcommand additionally prints to stdout for scripting.
+	if os.Args[1] != "version" {
+		log.Printf("certforge-discovery %s", Version)
+	}
+
 	switch os.Args[1] {
 	case "setup":
 		cmdSetup()

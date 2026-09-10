@@ -38,10 +38,17 @@ func ScanWindowsLocal(knownCAs []*x509.Certificate) []client.Cert {
 	iisBindings := enumIISBindings()
 	log.Printf("[windows] IIS: %d binding(s)", len(iisBindings))
 
-	// Step 3 — RDP listener cert thumbprint (empty when RDP has no custom cert)
+	// Step 3 — RDP listener cert thumbprint (empty or all-zeros when no custom cert configured)
 	rdpThumb := strings.ToUpper(strings.TrimSpace(enumRDPCert()))
+	// All-zeros thumbprint means Windows is using its auto-generated self-signed cert
+	// for RDP — not a real custom cert, so ignore it.
+	if rdpThumb == "0000000000000000000000000000000000000000" {
+		rdpThumb = ""
+	}
 	if rdpThumb != "" {
 		log.Printf("[windows] RDP: cert thumbprint %s", rdpThumb)
+	} else {
+		log.Printf("[windows] RDP: no custom cert (default self-signed)")
 	}
 
 	// Step 4 — netsh http SSL bindings: thumbprint (upper) → ["ip:port", ...]
@@ -154,7 +161,13 @@ func enumCertStore() []storeCert {
 		}
 		cert, err := x509.ParseCertificate(der)
 		if err != nil {
-			log.Printf("[windows] cert store: parse error for %s: %v", r.Thumbprint, err)
+			// "negative serial number" is common for legacy Microsoft root/intermediate CAs
+			// that predate strict ASN.1 encoding — skip them silently, they are CA certs.
+			if strings.Contains(err.Error(), "negative serial") {
+				log.Printf("[windows] cert store: skipping %s (legacy CA cert with non-standard serial)", r.Thumbprint)
+			} else {
+				log.Printf("[windows] cert store: parse error for %s: %v", r.Thumbprint, err)
+			}
 			continue
 		}
 		result = append(result, storeCert{thumbprint: r.Thumbprint, cert: cert})

@@ -166,7 +166,9 @@ type Cert struct {
 	SeenDeployed bool       `json:"seen_deployed"`
 	ScanHosts    string     `json:"scan_hosts"`
 	EKU          []string   `json:"eku"`
-	IssuerType   string     `json:"issuer_type,omitempty"` // "internal_ca" when signed by a known internal CA
+	IssuerType   string     `json:"issuer_type,omitempty"`  // "internal_ca" when signed by a known internal CA
+	KeyAlgorithm string     `json:"key_algorithm,omitempty"` // "rsa" | "ec" | "ed25519"
+	KeyBits      int        `json:"key_bits,omitempty"`      // e.g. 2048, 4096, 256, 384
 }
 
 // IngestResult is the response from POST /api/v1/discovery/ingest.

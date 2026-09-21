@@ -1,6 +1,9 @@
 package scan
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
@@ -67,6 +70,20 @@ func issuerTypeFromName(issuerName string, knownCAs []*x509.Certificate) string 
 		}
 	}
 	return ""
+}
+
+// certKeyInfo extracts the key algorithm and bit-size from a parsed certificate.
+func certKeyInfo(cert *x509.Certificate) (string, int) {
+	switch pub := cert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		return "rsa", pub.N.BitLen()
+	case *ecdsa.PublicKey:
+		return "ec", pub.Curve.Params().BitSize
+	case ed25519.PublicKey:
+		return "ed25519", 256
+	default:
+		return "", 0
+	}
 }
 
 func certFingerprint(cert *x509.Certificate) string {

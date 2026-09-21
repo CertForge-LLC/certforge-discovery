@@ -71,6 +71,7 @@ func parseLocalCerts(path string, knownCAs []*x509.Certificate) []client.Cert {
 		}
 		nb := cert.NotBefore
 		na := cert.NotAfter
+		keyAlg, keyBits := certKeyInfo(cert)
 		certs = append(certs, client.Cert{
 			Fingerprint:  certFingerprint(cert),
 			Serial:       cert.SerialNumber.String(),
@@ -83,6 +84,8 @@ func parseLocalCerts(path string, knownCAs []*x509.Certificate) []client.Cert {
 			SourceDetail: path,
 			EKU:          ekuStrings(cert),
 			IssuerType:   issuerTypeFor(cert, knownCAs),
+			KeyAlgorithm: keyAlg,
+			KeyBits:      keyBits,
 		})
 	}
 	if len(certs) > 0 {

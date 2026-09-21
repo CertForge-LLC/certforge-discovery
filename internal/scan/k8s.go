@@ -102,6 +102,7 @@ func parseK8sCert(certPEM []byte, ref string, knownCAs []*x509.Certificate) []cl
 		}
 		nb := cert.NotBefore
 		na := cert.NotAfter
+		keyAlg, keyBits := certKeyInfo(cert)
 		certs = append(certs, client.Cert{
 			Fingerprint:  certFingerprint(cert),
 			Serial:       cert.SerialNumber.String(),
@@ -114,6 +115,8 @@ func parseK8sCert(certPEM []byte, ref string, knownCAs []*x509.Certificate) []cl
 			SourceDetail: ref,
 			EKU:          ekuStrings(cert),
 			IssuerType:   issuerTypeFor(cert, knownCAs),
+			KeyAlgorithm: keyAlg,
+			KeyBits:      keyBits,
 		})
 	}
 	return certs

@@ -120,6 +120,7 @@ func probeTLS(ctx context.Context, host, port string, knownCAs []*x509.Certifica
 		}
 		nb := cert.NotBefore
 		na := cert.NotAfter
+		keyAlg, keyBits := certKeyInfo(cert)
 		certs = append(certs, client.Cert{
 			Fingerprint:  certFingerprint(cert),
 			Serial:       cert.SerialNumber.String(),
@@ -135,6 +136,8 @@ func probeTLS(ctx context.Context, host, port string, knownCAs []*x509.Certifica
 			ScanHosts:    addr,
 			EKU:          ekuStrings(cert),
 			IssuerType:   issuerTypeFor(cert, knownCAs),
+			KeyAlgorithm: keyAlg,
+			KeyBits:      keyBits,
 		})
 	}
 	return certs
